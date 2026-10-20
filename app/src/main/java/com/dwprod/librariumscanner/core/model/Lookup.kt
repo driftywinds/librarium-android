@@ -5,6 +5,7 @@ package com.dwprod.librariumscanner.core.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * Port of `struct ISBNLookupResult` (`Models/Lookup.swift:3-18`).
@@ -178,7 +179,15 @@ data class Series(
     val tags: List<Tag> = emptyList(),
     val genres: List<Genre> = emptyList(),
     val publicationYear: Int? = null,
-)
+) {
+    /** Client-only origin, stamped by the load that fetched the row. */
+    @Transient
+    var serverUrl: String = ""
+
+    /** Absolute cover URL, or null when there is nothing to load. */
+    fun coverImageUrl(): String? =
+        resolveCoverPath(coverUrl, libraryCoverBase(serverUrl))
+}
 
 /** Port of `struct Author`/author index rows. */
 @Serializable
@@ -188,13 +197,32 @@ data class Author(
     val sortName: String = "",
     val bookCount: Int = 0,
     val role: String = "",
+) {
+    /**
+     * Client-only, like [com.dwprod.librariumscanner.core.model.Library.serverUrl]:
+     * the index's spine covers are relative paths, and the row renders its own
+     * portrait/books, so it carries the origin it came from.
+     */
+    @Transient
+    var serverUrl: String = ""
+}
+
+/**
+ * One entry of the authors index' `roles` array — the server emits
+ * `{code, count}` (`internal/api/models/contributor_index.go`), and the iOS
+ * port decodes the same shape (`ContributorRoleCount`, `AuthorIndex.swift:88+`).
+ */
+@Serializable
+data class AuthorRoleCount(
+    val code: String = "",
+    val count: Int = 0,
 )
 
 @Serializable
 data class AuthorIndexPage(
     val items: List<Author> = emptyList(),
     val total: Int = 0,
-    val roles: List<String> = emptyList(),
+    val roles: List<AuthorRoleCount> = emptyList(),
 )
 
 /** Port of the `/me/counts` response — a bare map of label to number. */

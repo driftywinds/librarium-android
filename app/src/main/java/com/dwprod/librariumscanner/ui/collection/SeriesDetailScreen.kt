@@ -94,8 +94,10 @@ class SeriesDetailViewModel(
                 }
                 val row: Series? = runCatching { client.series(libraryId, seriesId) }.getOrNull()
                 val books = runCatching { client.seriesBooks(libraryId, seriesId).map { it.book } }
+                    .onSuccess { rows -> rows.forEach { it.serverUrl = client.serverUrl } }
                     .getOrDefault(emptyList())
-                _state.value = SeriesDetailState(series = row, books = books, loading = false)
+                val stamped = row?.also { it.serverUrl = client.serverUrl }
+                _state.value = SeriesDetailState(series = stamped, books = books, loading = false)
             } catch (e: Exception) {
                 _state.value = SeriesDetailState(
                     loading = false,
@@ -174,7 +176,7 @@ fun SeriesDetailScreen(
             ) {
                 if (!s.coverUrl.isNullOrEmpty()) {
                     AsyncImage(
-                        model = s.coverUrl,
+                        model = s.coverImageUrl(),
                         contentDescription = s.name,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -241,7 +243,7 @@ private fun SeriesBookCell(book: Book, onClick: () -> Unit) {
         ) {
             if (!book.coverUrl.isNullOrEmpty()) {
                 AsyncImage(
-                    model = book.coverUrl,
+                    model = book.coverImageUrl(),
                     contentDescription = book.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),

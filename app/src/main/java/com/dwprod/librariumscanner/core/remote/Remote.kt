@@ -81,13 +81,19 @@ enum class SeriesSortField(val field: String, val dir: String) {
 
 /**
  * Port of `CreateBookRequest` / `ContributorInput` / `CreateEditionRequest`
- * (`BookService.swift:223-268`).
+ * (`BookService.swift:223-268`), extended to the server's full contract:
+ * the api `bookRequestBody` accepts a contributor **name** instead of an id —
+ * "Name, instead of contributor_id, finds or creates the person"
+ * (`internal/api/handlers/books.go`). The iOS port predates that field; the
+ * scan flow needs it, so it is carried here rather than copied blindly.
  */
 @kotlinx.serialization.Serializable
 data class ContributorInput(
     val contributorId: String,
     val role: String,
     val displayOrder: Int = 0,
+    /** Finds-or-creates a person when [contributorId] is empty. */
+    val name: String? = null,
 )
 
 @kotlinx.serialization.Serializable
@@ -229,6 +235,18 @@ data class WishlistEntryRequest(val bookId: String, val notes: String = "")
  * the contract the iOS services keep.
  */
 class LibrariumApi2(private val api: LibrariumApi) {
+
+    /**
+     * The server origin this client answers, without a trailing slash.
+     *
+     * The server emits relative cover paths (`/api/v1/books/{id}/cover?v=…`)
+     * whenever the book has an image — an author spine, a series cover, a book
+     * cover are all relative. Coil needs an absolute URL, and how a client
+     * resolves those is exactly what `CoverURL.resolve`
+     * (`Library+CoverURL.swift:12-20`) exists for on iOS. Exposing the base
+     * here keeps one resolution rule for every screen.
+     */
+    val serverUrl: String get() = api.baseUrl
 
     // ---------------------------------------------------------------- auth
 

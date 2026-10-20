@@ -87,6 +87,10 @@ class BookDetailViewModel(
                     runCatching { client.bookSeries(book.libraryId, bookIdArg) }.getOrDefault(emptyList())
                 } else emptyList()
                 val lib = if (libraryIdArg.isNotEmpty()) libraryIdArg else book.libraryId
+                // The cover path is relative to the server origin; stamp it so
+                // the hero image can be loaded by Coil (relative URLs 404 as
+                // file loads).
+                book.serverUrl = client.serverUrl
                 _state.value = _state.value.copy(
                     book = book,
                     myBook = mine,

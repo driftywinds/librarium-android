@@ -467,7 +467,7 @@ private fun BookCell(book: Book, onClick: () -> Unit) {
         ) {
             if (!book.coverUrl.isNullOrEmpty()) {
                 AsyncImage(
-                    model = book.coverUrl,
+                    model = book.coverImageUrl(),
                     contentDescription = book.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -798,7 +798,7 @@ private fun SeriesCell(series: Series, onClick: (Series) -> Unit) {
         ) {
             if (!series.coverUrl.isNullOrEmpty()) {
                 AsyncImage(
-                    model = series.coverUrl,
+                    model = series.coverImageUrl(),
                     contentDescription = series.name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),

@@ -108,7 +108,7 @@ fun BookDetailScreen(
                     ) {
                         if (!book.coverUrl.isNullOrEmpty()) {
                             AsyncImage(
-                                model = book.coverUrl,
+                                model = book.coverImageUrl(),
                                 contentDescription = book.title,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize(),

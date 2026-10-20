@@ -5,6 +5,7 @@ package com.dwprod.librariumscanner.core.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * Port of `struct User` (`Models/User.swift`).
@@ -83,6 +84,15 @@ data class Library(
     var serverName: String = ""
 
     val clientKey: String get() = "$serverUrl|$id"
+
+    /**
+     * Adds `path` to this library's server origin — the same resolution
+     * `CoverURL.resolve` does (`Library+CoverURL.swift:12-20`): absolute http(s)
+     * input passes through unchanged, anything else gets the server origin in
+     * front. Null/blank in, null out.
+     */
+    fun absoluteCoverUrl(path: String?): String? =
+        resolveCoverPath(path, serverUrl.trim().trimEnd('/').takeIf { it.isNotEmpty() })
 }
 
 /**
@@ -225,12 +235,39 @@ data class Book(
     /** Sent by the cross-library list; used to interleave accounts by release. */
     val publishYear: Int? = null,
 ) {
+    @Transient
+    var serverUrl: String = ""
+
     /** First contributor with the `author` role, else the first contributor. */
     val primaryAuthor: String?
         get() = contributors.firstOrNull { it.role.equals("author", true) }?.name
             ?: contributors.firstOrNull()?.name
 
     val displaySubtitle: String get() = subtitle
+
+    /**
+     * The cover as an absolute URL, resolved against this row's server origin
+     * (`CoverURL.resolve`, `Library+CoverURL.swift:12-20`). Null when there is
+     * no cover or the row never learned its origin — which renders as the
+     * placeholder, not as a broken request.
+     */
+    fun coverImageUrl(): String? = resolveCoverPath(coverUrl, libraryCoverBase(serverUrl))
+}
+
+/**
+ * Adds `path` to a server origin — the shared half of `CoverURL.resolve`
+ * (`Library+CoverURL.swift:12-20`). Null/blank base cannot resolve, deferred to
+ * [Library.absoluteCoverUrl] for library-owned paths.
+ */
+internal fun libraryCoverBase(serverUrl: String): String? =
+    serverUrl.trim().trimEnd('/').takeIf { it.isNotEmpty() }
+
+/** Resolves one cover path against [base]; absolute input passes through. */
+internal fun resolveCoverPath(path: String?, base: String?): String? {
+    val p = path?.takeIf { it.isNotBlank() } ?: return null
+    if (p.startsWith("http://") || p.startsWith("https://")) return p
+    val b = base ?: return null
+    return b + (if (p.startsWith("/")) p else "/$p")
 }
 
 /**

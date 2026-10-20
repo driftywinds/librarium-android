@@ -125,6 +125,10 @@ class CollectionViewModel(
             val client = container.activeClient() ?: return@launch
             try {
                 _libraries.value = client.libraries().sortedBy { it.name }
+                _libraries.value.forEach { lib ->
+                    lib.serverName = container.accountManager.primary?.name ?: ""
+                    lib.serverUrl = client.serverUrl
+                }
                 _selectedLibraryId.value = _libraries.value.firstOrNull()?.id
             } catch (e: Exception) {
                 _books.value = _books.value.copy(error = (e as? ApiException)?.display ?: e.message)
@@ -223,6 +227,10 @@ class CollectionViewModel(
                     sort = sort,
                 )
                 val facets = runCatching { client.browseFacets(scoped.queryString()) }.getOrNull()
+                // The server sends cover paths relative to its origin; a grid
+                // cell cannot know the origin, so each row carries it (stamped
+                // exactly like the scan flow stamps `Library.serverUrl`).
+                page.items.forEach { it.serverUrl = client.serverUrl }
                 _books.value = _books.value.copy(
                     books = page.items,
                     total = page.total,
@@ -269,6 +277,10 @@ class CollectionViewModel(
                         perPage = PER_PAGE,
                         sort = _books.value.sort,
                     )
+                    // Same repair as the fresh load: appended pages are
+                    // relative-path rows too, and their cells render one sheet
+                    // later than the load that fetched them.
+                    page.items.forEach { it.serverUrl = client.serverUrl }
                     // By id, not by count. Appending blind puts a book twice in
                     // the grid when a filter and the page budget disagree.
                     val seen = before.books.map { it.id }.toMutableSet()
@@ -315,6 +327,7 @@ class CollectionViewModel(
                     page = 1,
                     sort = SeriesSortField.NAME,
                 )
+                page.items.forEach { it.serverUrl = client.serverUrl }
                 _series.value = _series.value.copy(
                     series = page.items,
                     total = page.total,
@@ -353,6 +366,9 @@ class CollectionViewModel(
                     libraryId = lib,
                     query = before.search.trim(),
                 )
+                // The authors index sends book spines with relative cover
+                // paths; the author page resolves them the same way.
+                page.items.forEach { it.serverUrl = client.serverUrl }
                 _authors.value = _authors.value.copy(
                     authors = page.items,
                     total = page.total,
@@ -375,6 +391,7 @@ class CollectionViewModel(
         val query = BrowseQuery(facets = mapOf(com.dwprod.librariumscanner.core.remote.BrowseFacet.CONTRIBUTOR to setOf(contributorId)))
         return try {
             client.browseBooks(query.queryString(), 1, perPage, BookSortField.TITLE_ASC).items
+                .onEach { it.serverUrl = client.serverUrl }
         } catch (_: Exception) {
             emptyList()
         }
@@ -385,6 +402,7 @@ class CollectionViewModel(
         val client = container.activeClient() ?: return emptyList()
         return try {
             client.seriesBooks(libraryId, seriesId).map { it.book }
+                .onEach { it.serverUrl = client.serverUrl }
         } catch (_: Exception) {
             emptyList()
         }

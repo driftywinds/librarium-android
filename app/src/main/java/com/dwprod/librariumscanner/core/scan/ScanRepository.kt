@@ -10,6 +10,7 @@ import com.dwprod.librariumscanner.core.model.Library
 import com.dwprod.librariumscanner.core.net.ApiException
 import com.dwprod.librariumscanner.core.remote.CreateBookRequest
 import com.dwprod.librariumscanner.core.remote.CreateEditionRequest
+import com.dwprod.librariumscanner.core.remote.ContributorInput
 import com.dwprod.librariumscanner.core.remote.LibrariumApi2
 import com.dwprod.librariumscanner.core.remote.UpdateMyBookRequest
 import kotlinx.coroutines.async
@@ -137,7 +138,20 @@ class ScanRepository(private val lookup: IsbnLookupService) {
             subtitle = lookupResult.subtitle,
             mediaTypeId = mediaTypeId ?: "",
             description = lookupResult.description,
-            contributors = emptyList(),
+            // The lookup's author strings ride in as name-contributors: the
+            // server's create contract accepts `name` instead of
+            // `contributor_id` and finds-or-creates the person
+            // (`internal/api/handlers/books.go`). An empty role defaults to
+            // "author" server-side; sending nothing here kept the book
+            // authorless and the authors page empty after every scan.
+            contributors = lookupResult.authors.mapIndexed { i, name ->
+                ContributorInput(
+                    contributorId = "",
+                    role = "author",
+                    displayOrder = i,
+                    name = name,
+                )
+            },
             tagIds = tagIds,
             genreIds = genreIds,
             edition = CreateEditionRequest(
