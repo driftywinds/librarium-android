@@ -97,8 +97,8 @@ fun CollectionScreen(
     val reloadTick by viewModel.reloadTick.collectAsStateWithLifecycle()
     val surface by viewModel.surface.collectAsStateWithLifecycle()
     val selection by viewModel.selection.collectAsStateWithLifecycle()
-    val views by viewModel.views.collectAsStateWithLifecycle()
-    val viewsSheetOpen by viewModel.viewsSheetOpen.collectAsStateWithLifecycle()
+    val lists by viewModel.lists.collectAsStateWithLifecycle()
+    val listsSheetOpen by viewModel.listsSheetOpen.collectAsStateWithLifecycle()
 
     val pagerState = rememberPagerState(pageCount = { CollectionSurface.entries.size })
     var drawerOpen by remember { mutableStateOf(false) }
@@ -109,9 +109,9 @@ fun CollectionScreen(
     var showFilters by remember { mutableStateOf(false) }
 
     // Back closes whatever this screen opened before it leaves the screen.
-    BackHandler(enabled = drawerOpen || showFilters || viewsSheetOpen || selection.isNotEmpty()) {
+    BackHandler(enabled = drawerOpen || showFilters || listsSheetOpen || selection.isNotEmpty()) {
         when {
-            viewsSheetOpen -> viewModel.closeViewsSheet()
+            listsSheetOpen -> viewModel.closeListsSheet()
             showFilters -> showFilters = false
             drawerOpen -> drawerOpen = false
             else -> viewModel.clearSelection()
@@ -175,7 +175,7 @@ fun CollectionScreen(
                     CollectionSurface.BOOKS -> BooksPane(
                         state = books,
                         selection = selection,
-                        viewsMessage = views.message,
+                        listsMessage = lists.message,
                         viewModel = viewModel,
                         onOpenBook = onOpenBook,
                         onOpenFilters = { showFilters = true },
@@ -231,13 +231,13 @@ fun CollectionScreen(
             )
         }
 
-        if (viewsSheetOpen && selection.isNotEmpty()) {
-            AddToViewSheet(
+        if (listsSheetOpen && selection.isNotEmpty()) {
+            AddToListSheet(
                 count = selection.size,
-                state = views,
-                onCreate = viewModel::createViewAndAdd,
-                onPick = viewModel::addSelectionToView,
-                onClose = viewModel::closeViewsSheet,
+                state = lists,
+                onCreate = viewModel::createListAndAdd,
+                onPick = viewModel::addSelectionToList,
+                onClose = viewModel::closeListsSheet,
             )
         }
     }
@@ -249,7 +249,7 @@ fun CollectionScreen(
 private fun BooksPane(
     state: BooksState,
     selection: Set<String>,
-    viewsMessage: String?,
+    listsMessage: String?,
     viewModel: CollectionViewModel,
     onOpenBook: (Book) -> Unit,
     onOpenFilters: () -> Unit,
@@ -324,17 +324,17 @@ private fun BooksPane(
         if (selectionMode) {
             SelectionBar(
                 count = selection.size,
-                onAddToView = viewModel::openViewsSheet,
+                onAddToList = viewModel::openListsSheet,
                 onCancel = viewModel::clearSelection,
             )
         }
-        if (viewsMessage != null) {
-            // A view was written into; say so, then get out of the way.
-            LaunchedEffect(viewsMessage) {
+        if (listsMessage != null) {
+            // A list was written into; say so, then get out of the way.
+            LaunchedEffect(listsMessage) {
                 kotlinx.coroutines.delay(3500)
-                viewModel.clearViewsMessage()
+                viewModel.clearListsMessage()
             }
-            MessagePill(viewsMessage)
+            MessagePill(listsMessage)
         }
 
         if (state.error != null && state.books.isEmpty()) {
@@ -639,7 +639,7 @@ private fun BookCell(
  * one action that matters, and the way out.
  */
 @Composable
-private fun SelectionBar(count: Int, onAddToView: () -> Unit, onCancel: () -> Unit) {
+private fun SelectionBar(count: Int, onAddToList: () -> Unit, onCancel: () -> Unit) {
     val colors = LocalLibrariumTheme.current.colors
     Row(
         modifier = Modifier
@@ -658,13 +658,13 @@ private fun SelectionBar(count: Int, onAddToView: () -> Unit, onCancel: () -> Un
         )
         Spacer(Modifier.weight(1f))
         Text(
-            "Add to view",
+            "Add to list",
             color = colors.accentStrong,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
-                .clickable { onAddToView() }
+                .clickable { onAddToList() }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         )
         Text(
@@ -697,21 +697,21 @@ private fun MessagePill(text: String) {
     }
 }
 
-// ---------------------------------------------------------------------- views
+// ---------------------------------------------------------------------- lists
 
 /**
- * Files the books picked by long-press into a view.
+ * Files the books picked by long-press into a list.
  *
  * Two doors, because a reader either knows where the books go or is making the
- * place for them now: name a new view (create, then add), or pick one already
+ * place for them now: name a new list (create, then add), or pick one already
  * there. Both land on the same two server calls — `POST /me/lists` and
- * `POST /me/lists/{id}/books/{book_id}` — and neither is available for a smart
- * view, which is why only manual lists are offered.
+ * `POST /me/lists/{id}/books/{book_id}` — and neither works for a saved view,
+ * which is why the views are listed read-only below the lists.
  */
 @Composable
-private fun AddToViewSheet(
+private fun AddToListSheet(
     count: Int,
-    state: ViewsState,
+    state: ListsState,
     onCreate: (String) -> Unit,
     onPick: (String) -> Unit,
     onClose: () -> Unit,
@@ -740,7 +740,7 @@ private fun AddToViewSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Add to a view",
+                        "Add to a list",
                         color = colors.appText,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
@@ -768,7 +768,7 @@ private fun AddToViewSheet(
                     value = name,
                     onValueChange = { name = it },
                     placeholder = {
-                        Text("Name a new view…", color = colors.appText3, fontSize = 14.sp)
+                        Text("Name a new list…", color = colors.appText3, fontSize = 14.sp)
                     },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
@@ -800,25 +800,48 @@ private fun AddToViewSheet(
             }
 
             Spacer(Modifier.height(16.dp))
-            Text(
-                "EXISTING VIEWS",
-                color = colors.appText3,
-                fontSize = 11.sp,
-                letterSpacing = 1.2.sp,
-            )
-            Spacer(Modifier.height(8.dp))
+            val addable = state.listsAddableTo()
+            val filterOnly = state.savedViews()
             when {
                 state.loading && state.lists.isEmpty() ->
                     Text("Loading…", color = colors.appText3, fontSize = 14.sp)
-                state.loaded && state.lists.isEmpty() ->
-                    Text(
-                        "No views yet — name one above.",
-                        color = colors.appText3,
-                        fontSize = 13.sp,
-                    )
-                else -> LazyColumn(Modifier.heightIn(max = 300.dp)) {
-                    items(state.lists, key = { it.id }) { view ->
-                        ViewRow(view, enabled = !state.saving, onPick = onPick)
+                else -> LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                    item(key = "lists-header") {
+                        SheetSectionLabel("YOUR LISTS")
+                    }
+                    if (addable.isEmpty() && state.loaded) {
+                        item(key = "lists-empty") {
+                            Text(
+                                "No lists yet — name one above.",
+                                color = colors.appText3,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(bottom = 4.dp),
+                            )
+                        }
+                    }
+                    items(addable, key = { it.id }) { list ->
+                        ListRow(list, enabled = !state.saving, onPick = onPick)
+                    }
+
+                    // The server's other kind. Listing these is the difference
+                    // between "my views are gone" and "a view fills itself and
+                    // cannot take picked books"; the note says which.
+                    if (filterOnly.isNotEmpty()) {
+                        item(key = "views-header") {
+                            Spacer(Modifier.height(14.dp))
+                            SheetSectionLabel("SAVED VIEWS")
+                        }
+                        item(key = "views-note") {
+                            Text(
+                                "A view is a saved filter: it fills itself, so books can't be added by hand.",
+                                color = colors.appText3,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(bottom = 4.dp),
+                            )
+                        }
+                        items(filterOnly, key = { it.id }) { view ->
+                            ListRow(view, enabled = false, onPick = onPick)
+                        }
                     }
                 }
             }
@@ -827,15 +850,28 @@ private fun AddToViewSheet(
     }
 }
 
-/** One destination row: the view's name, its size, and the tap target. */
+/** A small all-caps heading inside the sheet. */
 @Composable
-private fun ViewRow(view: SavedList, enabled: Boolean, onPick: (String) -> Unit) {
+private fun SheetSectionLabel(text: String) {
+    val colors = LocalLibrariumTheme.current.colors
+    Text(
+        text,
+        color = colors.appText3,
+        fontSize = 11.sp,
+        letterSpacing = 1.2.sp,
+        modifier = Modifier.padding(bottom = 6.dp),
+    )
+}
+
+/** One destination row: the list's name, its size, and the tap target. */
+@Composable
+private fun ListRow(list: SavedList, enabled: Boolean, onPick: (String) -> Unit) {
     val colors = LocalLibrariumTheme.current.colors
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled) { onPick(view.id) }
+            .clickable(enabled = enabled) { onPick(list.id) }
             .padding(horizontal = 4.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -843,12 +879,12 @@ private fun ViewRow(view: SavedList, enabled: Boolean, onPick: (String) -> Unit)
             modifier = Modifier
                 .size(28.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(colors.accentSoft),
+                .background(if (list.isSmart) colors.appCard else colors.accentSoft),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                view.name.take(1).uppercase(),
-                color = colors.accentStrong,
+                list.name.take(1).uppercase(),
+                color = if (list.isSmart) colors.appText3 else colors.accentStrong,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
             )
@@ -856,18 +892,26 @@ private fun ViewRow(view: SavedList, enabled: Boolean, onPick: (String) -> Unit)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                view.name,
-                color = colors.appText,
+                list.name,
+                color = if (enabled) colors.appText else colors.appText2,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
             )
             Text(
-                "${view.bookCount} ${if (view.bookCount == 1) "book" else "books"}",
+                if (list.isSmart) {
+                    "Saved view · ${list.bookCount} ${if (list.bookCount == 1) "book" else "books"}"
+                } else {
+                    "${list.bookCount} ${if (list.bookCount == 1) "book" else "books"}"
+                },
                 color = colors.appText3,
                 fontSize = 11.sp,
             )
         }
-        Text("›", color = colors.appText3, fontSize = 16.sp)
+        Text(
+            if (enabled) "›" else "filter",
+            color = colors.appText3,
+            fontSize = if (enabled) 16.sp else 10.sp,
+        )
     }
 }
 

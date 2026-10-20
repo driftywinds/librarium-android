@@ -103,4 +103,38 @@ class SavedListViewTest {
         // models.
         assertTrue(payload.contains("\"items\""))
     }
+
+    @Test
+    fun aServerSharedListDecodesAsManual() {
+        // visibility=library plus a shared_library_id is the shape a shelf
+        // shared into a library takes after the migration to lists. It must stay
+        // addable, or every shared shelf would vanish from the picker.
+        val shared = listRow.replace(
+            "\"visibility\": \"private\"",
+            "\"visibility\": \"library\", \"shared_library_id\": \"aaaabbbb-3333-4c4c-9e9e-2c2c2c2c2c2c\"",
+        )
+        val list = LIBRARIUM_JSON.decodeFromString(SavedList.serializer(), shared)
+
+        assertFalse(list.isSmart)
+        assertEquals("library", list.visibility)
+        assertEquals("aaaabbbb-3333-4c4c-9e9e-2c2c2c2c2c2c", list.sharedLibraryId)
+    }
+
+    @Test
+    fun theSheetSplitsTheTwoKinds() {
+        val manual = LIBRARIUM_JSON.decodeFromString(SavedList.serializer(), listRow)
+        val smart = LIBRARIUM_JSON.decodeFromString(
+            SavedList.serializer(),
+            listRow.replace("\"kind\": \"manual\"", "\"kind\": \"smart\"")
+                .replace("\"filter\": null", "\"filter\": {\"query\": \"own=gap\"}"),
+        )
+        val state = ListsState(
+            lists = listOf(manual, smart).sortedWith(compareBy({ it.isSmart }, { it.name })),
+            loaded = true,
+        )
+
+        assertEquals(listOf("Favourites"), state.listsAddableTo().map { it.name })
+        assertEquals(1, state.savedViews().size)
+        assertTrue(state.savedViews().first().isSmart)
+    }
 }

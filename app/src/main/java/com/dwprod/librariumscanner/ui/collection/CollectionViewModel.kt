@@ -71,24 +71,58 @@ data class AuthorsState(
 )
 
 /**
- * The views a multi-book selection can be filed into, and the write in flight.
+ * The lists a multi-book selection can be filed into, and the write in flight.
  *
- * A "view" in this app is the server's manual list: a set of books enumerated
- * by hand (`internal/models/user_book.go:List` — `kind` is `manual` or
- * `smart`, and only a manual list accepts books added by hand). Smart lists
- * are filtered out on read because picking one in the sheet would be picking a
- * control the server refuses (`internal/api/handlers/lists.go:AddBookToList`).
+ * A **list** is the server's hand-picked set (`kind: "manual"`): exactly what
+ * this screen makes and fills. A **view** is the other kind
+ * (`kind: "smart"`) — a saved filter that computes its own membership — and
+ * the add endpoint refuses it outright ("that list fills itself from its
+ * filter", `internal/api/handlers/lists.go:AddBookToList`). Both kinds arrive
+ * from the same read, so the sheet shows the views too, read-only, rather than
+ * making the account's saved views look absent.
  */
-data class ViewsState(
+data class ListsState(
     val lists: List<SavedList> = emptyList(),
     val loading: Boolean = false,
     val loaded: Boolean = false,
     val error: String? = null,
-    /** True while books are being written to a view. */
+    /** True while books are being written to a list. */
     val saving: Boolean = false,
     /** One-shot sentence after a write lands; the pane clears it on a timer. */
     val message: String? = null,
 )
+
+/**
+ * The lists a hand-picked selection can actually be filed into.
+ *
+ * Manual lists only. This is the server's rule, not a presentation choice: the
+ * add endpoint answers 400 "that list fills itself from its filter" for a smart
+ * one (`internal/api/handlers/lists.go:AddBookToList`).
+ */
+internal fun ListsState.listsAddableTo(): List<SavedList> = lists.filter { !it.isSmart }
+
+/**
+ * The saved views the account can see — smart lists, filter-backed.
+ *
+ * Shown in the sheet so it reflects what is on the server, and marked so a tap
+ * cannot be mistaken for something that will work: the server refuses hand-added
+ * books for these.
+ */
+internal fun ListsState.savedViews(): List<SavedList> = lists.filter { it.isSmart }
+
+/**
+ * A sentence a reader can act on, whether or not the failure was an
+ * [ApiException].
+ *
+ * Anything else is an exception thrown before the request was sent — OkHttp's
+ * "method POST must have a request body" being the one that sent this round
+ * chasing a phantom server bug — so it says what actually happened rather than
+ * passing the raw class message through as if the server had said it.
+ */
+private fun Throwable.describe(): String =
+    (this as? ApiException)?.display
+        ?: message?.takeIf { it.isNotBlank() }
+        ?: "Couldn't reach the server."
 
 /**
  * The person-scoped collection, driven by the active account's server.
@@ -131,10 +165,10 @@ class CollectionViewModel(
     private val _surface = MutableStateFlow(CollectionSurface.BOOKS)
     val surface: StateFlow<CollectionSurface> = _surface.asStateFlow()
 
-    // ------------------------------------------------- options & views
+    // --------------------------------------------------- lists
 
     /**
-     * Books picked by long-press, waiting to be filed into a view.
+     * Books picked by long-press, waiting to be filed into a list.
      *
      * A non-empty set *is* selection mode: there is nothing else to track, and
      * a separate flag could disagree with the set after a rotation.
@@ -142,11 +176,11 @@ class CollectionViewModel(
     private val _selection = MutableStateFlow<Set<String>>(emptySet())
     val selection: StateFlow<Set<String>> = _selection.asStateFlow()
 
-    private val _views = MutableStateFlow(ViewsState())
-    val views: StateFlow<ViewsState> = _views.asStateFlow()
+    private val _lists = MutableStateFlow(ListsState())
+    val lists: StateFlow<ListsState> = _lists.asStateFlow()
 
-    private val _viewsSheetOpen = MutableStateFlow(false)
-    val viewsSheetOpen: StateFlow<Boolean> = _viewsSheetOpen.asStateFlow()
+    private val _listsSheetOpen = MutableStateFlow(false)
+    val listsSheetOpen: StateFlow<Boolean> = _listsSheetOpen.asStateFlow()
 
     fun toggleSelection(bookId: String) {
         val current = _selection.value
@@ -157,98 +191,112 @@ class CollectionViewModel(
         _selection.value = emptySet()
     }
 
-    fun openViewsSheet() {
+    fun openListsSheet() {
         if (_selection.value.isEmpty()) return
-        _viewsSheetOpen.value = true
-        _views.value = _views.value.copy(error = null, message = null)
+        _listsSheetOpen.value = true
+        _lists.value = _lists.value.copy(error = null, message = null)
         // Always re-read on open: a book added from the web since the last time
         // this sheet was up would otherwise show a count one short.
-        loadViews(force = true)
+        loadLists(force = true)
     }
 
-    fun closeViewsSheet() {
-        _viewsSheetOpen.value = false
-        _views.value = _views.value.copy(error = null)
+    fun closeListsSheet() {
+        _listsSheetOpen.value = false
+        _lists.value = _lists.value.copy(error = null)
     }
 
-    fun clearViewsMessage() {
-        _views.value = _views.value.copy(message = null)
+    fun clearListsMessage() {
+        _lists.value = _lists.value.copy(message = null)
     }
 
     /**
-     * Loads the manual lists once per visit, refreshing counts.
+     * Loads the account's lists and saved views, refreshing counts.
      *
      * Seeding happens server-side on this read (`ListRepo.SeedBuiltIns`), so
      * the first call also creates the lists the product ships — which is why
      * this must not be skipped when the sheet is opened for the first time.
+     *
+     * Both kinds are kept. The sheet splits them, because a smart view cannot
+     * take books by hand and hiding it made server-created views look absent.
      */
-    fun loadViews(force: Boolean = false) {
-        val state = _views.value
+    fun loadLists(force: Boolean = false) {
+        val state = _lists.value
         if (state.loading || (state.loaded && !force)) return
         viewModelScope.launch {
             val client = container.activeClient()
                 ?: run {
-                    _views.value = _views.value.copy(error = "Not signed in.")
+                    _lists.value = _lists.value.copy(error = "Not signed in.")
                     return@launch
                 }
-            _views.value = _views.value.copy(loading = true, error = null)
+            _lists.value = _lists.value.copy(loading = true, error = null)
             try {
-                // Smart lists compute their membership from a stored filter and
-                // refuse books added by hand, so they are not destinations for
-                // a selection.
-                val manual = client.lists().filter { !it.isSmart }.sortedBy { it.name }
-                _views.value = _views.value.copy(
-                    lists = manual,
+                // Manual first — the ones this screen can act on — then by name.
+                val all = client.lists().sortedWith(compareBy({ it.isSmart }, { it.name }))
+                _lists.value = _lists.value.copy(
+                    lists = all,
                     loading = false,
                     loaded = true,
                     error = null,
                 )
             } catch (e: Exception) {
-                _views.value = _views.value.copy(
+                _lists.value = _lists.value.copy(
                     loading = false,
                     loaded = true,
-                    error = (e as? ApiException)?.display ?: e.message,
+                    error = e.describe(),
                 )
             }
         }
     }
 
-    /** Files every selected book into an existing view. */
-    fun addSelectionToView(listId: String) {
-        val state = _views.value
+    /** Files every selected book into an existing list. */
+    fun addSelectionToList(listId: String) {
+        val state = _lists.value
         if (state.saving) return
         val list = state.lists.firstOrNull { it.id == listId } ?: return
+        if (list.isSmart) {
+            // Tapping one is a question, not a command: say why it cannot work
+            // instead of letting it fail as a 400 nobody sees.
+            _lists.value = _lists.value.copy(
+                error = "“${list.name}” fills itself from its filter, so books cannot be added by hand.",
+            )
+            return
+        }
         viewModelScope.launch {
             val client = container.activeClient()
                 ?: run {
-                    _views.value = _views.value.copy(error = "Not signed in.")
+                    _lists.value = _lists.value.copy(error = "Not signed in.")
                     return@launch
                 }
-            _views.value = _views.value.copy(saving = true, error = null)
+            _lists.value = _lists.value.copy(saving = true, error = null)
             writeSelection(client, list)
         }
     }
 
-    /** Creates a view named by the reader, then files the selection into it. */
-    fun createViewAndAdd(name: String) {
+    /** Creates a list named by the reader, then files the selection into it. */
+    fun createListAndAdd(name: String) {
         val trimmed = name.trim()
-        if (trimmed.isEmpty() || _views.value.saving) return
+        if (trimmed.isEmpty() || _lists.value.saving) return
         viewModelScope.launch {
             val client = container.activeClient()
                 ?: run {
-                    _views.value = _views.value.copy(error = "Not signed in.")
+                    _lists.value = _lists.value.copy(error = "Not signed in.")
                     return@launch
                 }
-            _views.value = _views.value.copy(saving = true, error = null)
+            _lists.value = _lists.value.copy(saving = true, error = null)
             val list = try {
                 client.createList(trimmed)
             } catch (e: Exception) {
-                _views.value = _views.value.copy(
-                    saving = false,
-                    error = (e as? ApiException)?.display ?: e.message,
-                )
+                _lists.value = _lists.value.copy(saving = false, error = e.describe())
                 return@launch
             }
+            // The list exists on the server from here on. Show it immediately so
+            // a failure to file the books cannot read as "the view was never
+            // created" — the exact confusion a half-finished create causes.
+            _lists.value = _lists.value.copy(
+                lists = (_lists.value.lists + list)
+                    .distinctBy { it.id }
+                    .sortedWith(compareBy({ it.isSmart }, { it.name })),
+            )
             writeSelection(client, list)
         }
     }
@@ -270,27 +318,27 @@ class CollectionViewModel(
                 client.addBookToList(list.id, id)
                 added++
             } catch (e: Exception) {
-                failure = (e as? ApiException)?.display ?: e.message
+                failure = e.describe()
                 break
             }
         }
         if (failure != null) {
-            _views.value = _views.value.copy(saving = false, error = failure)
+            _lists.value = _lists.value.copy(saving = false, error = failure)
             return
         }
         _selection.value = emptySet()
-        _viewsSheetOpen.value = false
-        _views.value = _views.value.copy(
+        _listsSheetOpen.value = false
+        _lists.value = _lists.value.copy(
             saving = false,
             error = null,
             // Counted locally so the sheet's next open is honest even if the
             // refresh below fails.
-            lists = _views.value.lists.map {
+            lists = _lists.value.lists.map {
                 if (it.id == list.id) it.copy(bookCount = it.bookCount + added) else it
             },
             message = "Added $added ${if (added == 1) "book" else "books"} to ${list.name}",
         )
-        loadViews(force = true)
+        loadLists(force = true)
     }
 
     /**

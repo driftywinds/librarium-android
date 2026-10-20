@@ -155,7 +155,17 @@ class LibrariumApi(
 
     suspend fun delete(path: String) = exchangeVoid("DELETE", path, null)
 
-    suspend fun postVoid(path: String) = exchangeVoid("POST", path, null)
+    /**
+     * A POST whose route takes no payload.
+     *
+     * OkHttp refuses `method("POST", null)` outright — "method POST must have a
+     * request body" — which is not a server answer, so it surfaced in the UI as
+     * that exact sentence and no request ever left the phone. An empty JSON
+     * object is the smallest body that satisfies the client while still
+     * decoding cleanly for any handler that reads the stream.
+     */
+    suspend fun postVoid(path: String) =
+        exchangeVoid("POST", path, "{}".toRequestBody(jsonMediaType))
 
     suspend fun <B> postVoid(path: String, body: B, bodySerializer: KSerializer<B>) =
         exchangeVoid("POST", path, LIBRARIUM_JSON.encodeToString(bodySerializer, body).toRequestBody(jsonMediaType))
