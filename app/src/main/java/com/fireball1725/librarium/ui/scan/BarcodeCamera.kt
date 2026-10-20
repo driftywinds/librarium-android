@@ -5,12 +5,16 @@ package com.fireball1725.librarium.ui.scan
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.util.Log
+import android.util.Size
 import android.view.ViewGroup
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
@@ -30,27 +34,46 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+
+private const val TAG = "BarcodeCamera"
 
 /**
  * Bare camera + barcode detector.
  *
  * Port of `HeadlessBarcodeScanner` (`RedesignedScanFlow.swift:575-589`) and the
  * format policy from `BarcodeScannerView.swift`: **exactly** `.ean13, .ean8,
- * .code128` and nothing else. QR codes and barcodes that are not ISBN carriers
- * would happily hand back strings that look like one, and every one of those is
- * a lookup that wastes a provider round-trip to answer "no".
+ * .code128` and nothing else, because QR codes and non-ISBN symbologies hand
+ * back strings that look like one and every one of those is a wasted lookup.
  *
  * CameraX + ML Kit stand in for `AVCaptureSession` + `AVCaptureMetadataOutput`.
- * Like the iOS version there is no frame crop — `rectOfInterest` is never set on
- * iOS either, so the highlighted frame on screen is cosmetic.
+ * As on iOS there is no frame crop — `rectOfInterest` is never set there either,
+ * so the highlighted frame on screen is cosmetic.
  *
- * Single-shot semantics: the first barcode wins and analysis stops immediately.
- * [hasFired] guards the debounce, because ML Kit fires on every frame and a
- * lookup per frame would hammer the server.
+ * Two things here are load-bearing and easy to get wrong:
+ *
+ * 1. **The [androidx.camera.core.ImageProxy] must stay open until ML Kit is
+ *    done.** `process()` is asynchronous and reads pixels lazily; closing the
+ *    proxy first hands the frame straight back to the camera to be overwritten,
+ *    which on a fast sensor means the detector sees a torn buffer or nothing at
+ *    all. The symptom is a live preview that never recognises anything. So the
+ *    close lives in `addOnCompleteListener`, not right after `fromMediaImage`.
+ * 2. **One [com.google.mlkit.vision.barcode.BarcodeScanner] for the screen, not
+ *    one per frame.** Constructing a detector per frame drops frames on the
+ *    analysis thread and leaks native handles if a future is cancelled.
+ *
+ * Single-shot semantics: the first barcode wins and analysis stops. [hasFiredRef]
+ * is an atomic rather than the Compose state because ML Kit's callbacks arrive on
+ * another thread and two frames can complete out of order.
+ *
+ * [resetKey] re-arms the detector. Without it a screen that stays composed
+ * (the scanner sits under the result sheet) would stay fired forever after the
+ * first successful scan, so "Scan another" would return to a dead camera.
  */
 @Composable
 fun BarcodeCamera(
     modifier: Modifier = Modifier,
+    resetKey: Any? = Unit,
     onScan: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -72,37 +95,54 @@ fun BarcodeCamera(
 
     if (!hasPermission) return
 
-    var hasFired by remember { mutableStateOf(false) }
+    val hasFiredRef = remember { AtomicBoolean(false) }
+
+    // Re-arm whenever the caller says a new scan is starting.
+    LaunchedEffect(resetKey) { hasFiredRef.set(false) }
 
     val executor = remember { Executors.newSingleThreadExecutor() }
 
-    val analyzer = remember {
+    val scanner = remember {
+        BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(
+                    Barcode.FORMAT_EAN_13,
+                    Barcode.FORMAT_EAN_8,
+                    Barcode.FORMAT_CODE_128,
+                )
+                .build()
+        )
+    }
+
+    val analyzer = remember(scanner) {
         ImageAnalysis.Analyzer { proxy ->
-            if (hasFired) {
+            val mediaImage = proxy.image
+            if (mediaImage == null || hasFiredRef.get()) {
                 proxy.close()
                 return@Analyzer
             }
-            // ML Kit is happy with the default rotation metadata CameraX carries.
-            val media = InputImage.fromMediaImage(proxy.image!!, proxy.imageInfo.rotationDegrees)
-            proxy.close()
-            val client = BarcodeScanning.getClient(
-                BarcodeScannerOptions.Builder()
-                    .setBarcodeFormats(
-                        Barcode.FORMAT_EAN_13,
-                        Barcode.FORMAT_EAN_8,
-                        Barcode.FORMAT_CODE_128,
-                    )
-                    .build()
-            )
-            client.process(media)
+            val image = InputImage.fromMediaImage(mediaImage, proxy.imageInfo.rotationDegrees)
+            scanner.process(image)
                 .addOnSuccessListener { codes ->
-                    val hit = codes.firstOrNull()?.rawValue ?: return@addOnSuccessListener
-                    if (!hasFired) {
-                        hasFired = true
+                    Log.d(TAG, "saw ${codes.size} barcode(s)")
+                    val hit = codes.firstOrNull()?.rawValue
+                    if (hit != null && hasFiredRef.compareAndSet(false, true)) {
                         onScan(hit)
                     }
                 }
-                .addOnCompleteListener { client.close() }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "detect failed: ${e.message}")
+                }
+                // Only now is the buffer safe to hand back. See (1) above.
+                .addOnCompleteListener { proxy.close() }
+        }
+    }
+
+    DisposableEffect(scanner) {
+        onDispose {
+            hasFiredRef.set(true)
+            executor.shutdown()
+            scanner.close()
         }
     }
 
@@ -125,7 +165,21 @@ fun BarcodeCamera(
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
+                // 640x480 (CameraX's default analysis size) is too coarse for a
+                // 40 mm ISBN barcode held at arm's length: the bars alias into
+                // noise and the detector reports nothing. 720p is the sweet spot
+                // — enough resolution, still fast enough to analyse every frame.
                 val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                ResolutionStrategy(
+                                    Size(1280, 720),
+                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                                )
+                            )
+                            .build()
+                    )
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                     .also { it.setAnalyzer(executor, analyzer) }
@@ -140,17 +194,17 @@ fun BarcodeCamera(
                         preview,
                         analysis,
                     )
-                } catch (_: Exception) {
-                    // Another component holds the camera; the retry comes from
-                    // recomposition rather than a crash loop.
+                    Log.d(TAG, "camera bound")
+                } catch (e: Exception) {
+                    // Another component holds the camera, or the device refused
+                    // the resolution. Logged rather than swallowed so a silent
+                    // black preview has something behind it.
+                    Log.e(TAG, "camera bind failed: ${e.message}", e)
                 }
             }, ContextCompat.getMainExecutor(ctx))
 
             previewView
         },
-        onRelease = {
-            hasFired = true
-            executor.shutdown()
-        },
+        onRelease = { hasFiredRef.set(true) },
     )
 }

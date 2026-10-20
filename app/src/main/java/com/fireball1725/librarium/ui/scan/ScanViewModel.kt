@@ -264,11 +264,51 @@ class ScanViewModel(
         publishMediaTypesForSelection()
     }
 
-    /** Pushes the current selection's server's media types into the UI flow. */
+    /**
+     * Pushes the current selection's server's media types into the UI flow.
+     */
     private fun publishMediaTypesForSelection() {
         val lib = selected
         val url = lib?.serverUrl ?: return
         _mediaTypes.value = mediaTypesByServer[url].orEmpty()
+    }
+
+    /**
+     * Pre-select a media type the way the scan sheet does
+     * (`RedesignedScanFlow.swift:950-977`).
+     *
+     * Both halves matter. The category pass lets provider genres drive the pick —
+     * a scan whose providers say "Manga" lands on Manga rather than Novel. The
+     * name fallback then prefers a plain "Book" or "Novel" **by exact match**,
+     * with any partial "…novel" match last so "Graphic Novel" and "Light Novel"
+     * do not become the default for an unclassified scan.
+     *
+     * Falling back to the server's first row is only correct because it is a
+     * last resort: the catalog is ordered alphabetically, so a bare
+     * `firstOrNull()` would file every scanned book as "Anthology".
+     */
+    fun guessMediaTypeId(
+        categories: List<String>?,
+        types: List<MediaType>,
+    ): String? {
+        if (types.isEmpty()) return null
+
+        // Blank categories must be dropped, not carried through: every string
+        // contains "", so a provider answering `[""]` would otherwise match the
+        // very first media type and file the book as "Anthology".
+        val cats = categories.orEmpty()
+            .map { it.lowercase() }
+            .filter { it.isNotBlank() }
+        for (t in types) {
+            val name = t.displayName.lowercase()
+            if (name.isEmpty()) continue
+            if (cats.any { it.contains(name) || name.contains(it) }) return t.id
+        }
+
+        types.firstOrNull { it.displayName.lowercase() == "book" }?.let { return it.id }
+        types.firstOrNull { it.displayName.lowercase() == "novel" }?.let { return it.id }
+        types.firstOrNull { it.displayName.lowercase().contains("novel") }?.let { return it.id }
+        return types.first().id
     }
 
     /**
@@ -289,10 +329,11 @@ class ScanViewModel(
                     api = client,
                     library = library,
                     lookupResult = found,
-                    // User's pick when they made one; the server's first type is
-                    // the fallback the iOS source uses (an empty UUID is rejected).
+                    // User's pick when they made one; otherwise the guess, not the
+                    // server's first row — the catalog is alphabetical, so
+                    // `firstOrNull()` files every book as "Anthology".
                     mediaTypeId = mediaTypeId
-                        ?: mediaTypesByServer[account.url]?.firstOrNull()?.id,
+                        ?: guessMediaTypeId(found.categories, mediaTypesByServer[account.url].orEmpty()),
                     readStatus = readStatus,
                 )
                 when (outcome) {

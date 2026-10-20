@@ -46,6 +46,12 @@ fun ScanFlowRoute(
     Box(modifier = Modifier.fillMaxSize()) {
         BarcodeCamera(
             modifier = Modifier.fillMaxSize(),
+            // The camera stays composed underneath the result sheet, so its
+            // single-shot latch would stay armed from the first scan onwards.
+            // Keying on "is scanning" re-arms exactly when we return to the
+            // camera, and not on the intermediate `LookingUp`/`Result` flips
+            // where a re-arm would just let a second frame through.
+            resetKey = phase == ScanPhase.Scanning,
             onScan = viewModel::onBarcode,
         )
 
