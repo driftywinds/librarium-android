@@ -27,4 +27,5 @@ Deep reference material lives in [`../docs/`](../docs):
 - [`ios-app-architecture.md`](../docs/ios-app-architecture.md) — the iOS app's topology, feature inventory, services and models.
 - [`ios-scan-flow.md`](../docs/ios-scan-flow.md) — the barcode/ISBN scan-to-add flow in full detail.
 - [`api-contract.md`](../docs/api-contract.md) — the librarium-api HTTP contract.
+- [`implementation-status.md`](../docs/implementation-status.md) — what is built, what is left, and the known debt. Read this first when resuming.
 - [`dependency-versions.md`](../docs/dependency-versions.md) — the verified Gradle version matrix and its sources.
