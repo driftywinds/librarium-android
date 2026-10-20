@@ -3,10 +3,15 @@
 
 package com.dwprod.librariumscanner.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dwprod.librariumscanner.ui.collection.CollectionViewModel
 import com.dwprod.librariumscanner.ui.scan.BarcodeCamera
 import com.dwprod.librariumscanner.ui.scan.ScanPhase
 import com.dwprod.librariumscanner.ui.scan.ScanResultView
@@ -35,6 +41,7 @@ import com.dwprod.librariumscanner.ui.theme.LocalLibrariumTheme
 @Composable
 fun ScanFlowRoute(
     viewModel: ScanViewModel,
+    collectionVm: CollectionViewModel,
     onFinish: () -> Unit,
 ) {
     val phase by viewModel.phase.collectAsStateWithLifecycle()
@@ -43,6 +50,16 @@ fun ScanFlowRoute(
     val ownership by viewModel.ownership.collectAsStateWithLifecycle()
     val mediaTypes by viewModel.mediaTypes.collectAsStateWithLifecycle()
 
+    // The collection must notice what a scan just added: every close out of
+    // the flow (result-sheet ✕, cancel button, back gesture) bumps the reload
+    // tick first, then the shell drops the overlay.
+    val finish = {
+        collectionVm.tickReload()
+        onFinish()
+    }
+    // The back gesture/button cancels out of the whole flow instead of
+    // leaving the app — the overlay owns the back edge while it is up.
+    BackHandler(enabled = true) { finish() }
     Box(modifier = Modifier.fillMaxSize()) {
         BarcodeCamera(
             modifier = Modifier.fillMaxSize(),
@@ -56,10 +73,18 @@ fun ScanFlowRoute(
         )
 
         when (val current = phase) {
-            is ScanPhase.Scanning -> ScanOverlay("Point at the ISBN barcode")
+            is ScanPhase.Scanning -> {
+                // Cancel is also a back gesture: the shell's BackHandler traps
+                // it, so an explicit button keeps the affordance discoverable.
+                CancelScanButton(onCancel = finish)
+                ScanOverlay("Point at the ISBN barcode")
+            }
             // No barcode in hand at this phase, so the hint stands in where the
             // result sheet would name the isbn it is working on.
-            is ScanPhase.LookingUp -> ScanOverlay("Looking it up…")
+            is ScanPhase.LookingUp -> {
+                CancelScanButton(onCancel = finish)
+                ScanOverlay("Looking it up…")
+            }
             is ScanPhase.Result -> ScanResultView(
                 phase = current,
                 libraries = libraries,
@@ -70,9 +95,9 @@ fun ScanFlowRoute(
                     viewModel.addBook(current.isbn, mediaTypeId, status)
                 },
                 onScanAnother = viewModel::resetForNextScan,
-                onClose = onFinish,
+                onClose = finish,
                 onManualEntry = { /* surfaced by the no-match screen */ },
-                onOpenBook = { _, _ -> onFinish() },
+                onOpenBook = { _, _ -> finish() },
             )
         }
     }
@@ -98,4 +123,28 @@ private fun ScanOverlay(text: String) {
         )
     }
 }
+
+/**
+ * Cancel affordance for the camera phases. A result sheet already carries its
+ * own close button; the two early phases are otherwise a view with no way out.
+ */
+@Composable
+private fun CancelScanButton(onCancel: () -> Unit) {
+    Box(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(top = 12.dp, start = 16.dp)
+                .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+                .clickable { onCancel() }
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("⌫", color = Color.White, fontSize = 16.sp)
+            Spacer(Modifier.width(8.dp))
+            Text("Cancel", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
 

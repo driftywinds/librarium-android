@@ -515,7 +515,10 @@ private fun BookCell(book: Book, onClick: () -> Unit) {
 
 private val theme_type_cardTitle = 13.sp
 
-/** The filter button; badge count matches [BooksState.query.activeFilterCount]. */
+/**
+ * The filter button: opens the facet picker (the browse-facets sheet). The
+ * accent dot marks that filters are on, like iOS's filter button badge.
+ */
 @Composable
 private fun FilterButton(badge: Int, onOpen: () -> Unit) {
     val colors = LocalLibrariumTheme.current.colors
@@ -528,7 +531,7 @@ private fun FilterButton(badge: Int, onOpen: () -> Unit) {
             .clickable { onOpen() },
         contentAlignment = Alignment.Center,
     ) {
-        Text("⚙", color = colors.appText2, fontSize = 18.sp)
+        Text("⧢", color = colors.appText2, fontSize = 18.sp)
         if (badge > 0) {
             Box(
                 modifier = Modifier

@@ -198,7 +198,13 @@ private fun ShellNavigate(container: AppContainer) {
         }
 
         if (scanning) {
-            ScanFlowRoute(viewModel = scanVm, onFinish = { scanning = false })
+            // Back handling and the refresh-on-close live inside
+            // ScanFlowRoute, so the gesture and the ✕ behave identically.
+            ScanFlowRoute(
+                viewModel = scanVm,
+                collectionVm = collectionVm,
+                onFinish = { scanning = false },
+            )
         }
     }
 }
