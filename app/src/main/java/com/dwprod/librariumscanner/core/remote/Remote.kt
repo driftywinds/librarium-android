@@ -216,6 +216,10 @@ data class FetchCoverRequest(val url: String)
 @kotlinx.serialization.Serializable
 data class SeriesBookRequest(val bookId: String, val position: Double = 0.0)
 
+/** The parts of `/health` a client reads. */
+@kotlinx.serialization.Serializable
+data class HealthInfo(val version: String = "", val status: String = "")
+
 @kotlinx.serialization.Serializable
 data class AdminUserPatch(val isActive: Boolean)
 
@@ -692,6 +696,18 @@ class LibrariumApi2(private val api: LibrariumApi) {
     suspend fun list(id: String): SavedList = api.get("/api/v1/me/lists/$id")
 
     suspend fun deleteList(id: String) = api.delete("/api/v1/me/lists/$id")
+
+    /**
+     * The server's version, from the un-authenticated `/health`.
+     *
+     * Deliberately not an envelope read: `/health` is a bare object, and it is
+     * the only thing that answers "which release am I pointed at" without
+     * needing an admin scope.
+     */
+    suspend fun healthVersion(): String =
+        kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString(HealthInfo.serializer(), api.getText("/health"))
+            .version
 
     /**
      * Makes a hand-filled list — what this app calls a view.

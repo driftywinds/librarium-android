@@ -27,6 +27,8 @@ import com.dwprod.librariumscanner.core.session.SessionState
 import com.dwprod.librariumscanner.ui.collection.CollectionViewModel
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import com.dwprod.librariumscanner.ui.connect.ServerConnectScreen
 import com.dwprod.librariumscanner.ui.connect.ServerConnectViewModel
 import com.dwprod.librariumscanner.ui.detail.BookDetailScreen
@@ -128,6 +130,47 @@ private fun ShellNavigate(container: AppContainer) {
                     },
                     onOpenList = { list ->
                         nav.navigate("list/${list.id}/${com.dwprod.librariumscanner.core.remote.enc(list.name.ifBlank { "List" })}")
+                    },
+                    onOpenSettings = { nav.navigate("settings") },
+                )
+            }
+
+            composable("settings") {
+                val settingsVm: com.dwprod.librariumscanner.ui.settings.SettingsViewModel = viewModel(
+                    factory = com.dwprod.librariumscanner.ui.settings.SettingsViewModel.Factory(container),
+                    key = "settings",
+                )
+                com.dwprod.librariumscanner.ui.settings.SettingsScreen(
+                    viewModel = settingsVm,
+                    onBack = { nav.popBackStack() },
+                    onAddServer = { nav.navigate("connect") },
+                    // A switch or a logout changes whose data the collection
+                    // should be showing; ticking the reload is what makes the
+                    // panes refetch instead of keeping the previous account's.
+                    onAccountsChanged = { collectionVm.tickReload() },
+                )
+            }
+
+            composable("connect") {
+                val connectVm: ServerConnectViewModel = viewModel(
+                    factory = ServerConnectViewModel.Factory(container.accountManager),
+                    key = "connect",
+                )
+                val scope = rememberCoroutineScope()
+                ServerConnectScreen(
+                    viewModel = connectVm,
+                    onConnected = {
+                        // Adding a server appends it; make it the one the app
+                        // talks to, or "add another server" would look like
+                        // nothing happened.
+                        scope.launch {
+                            container.accountManager.snapshot.accounts.lastOrNull()?.let { added ->
+                                container.accountManager.setPrimary(added.id)
+                                container.accountManager.setActive(added.id)
+                            }
+                            collectionVm.tickReload()
+                            nav.popBackStack()
+                        }
                     },
                 )
             }

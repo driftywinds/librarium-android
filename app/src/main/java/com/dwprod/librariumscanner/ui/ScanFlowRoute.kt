@@ -100,7 +100,7 @@ fun ScanFlowRoute(
                 },
                 onScanAnother = viewModel::resetForNextScan,
                 onClose = finish,
-                onManualEntry = { /* surfaced by the no-match screen */ },
+                onManualIsbn = viewModel::onManualIsbn,
                 onOpenBook = { _, _ -> finish() },
                 onSelectLibrary = viewModel::selectLibrary,
             )

@@ -73,11 +73,16 @@ fun ScanResultView(
     onAdd: (readStatus: String?, mediaTypeId: String?) -> Unit,
     onScanAnother: () -> Unit,
     onClose: () -> Unit,
-    onManualEntry: () -> Unit,
+    /** Runs a lookup for a typed ISBN, when the barcode would not read. */
+    onManualIsbn: (String) -> Unit,
     onOpenBook: (Library, String) -> Unit,
     onSelectLibrary: (String) -> Unit,
 ) {
     var selectedStatus by remember { mutableStateOf(ReadStatus.UNREAD) }
+    // Manual entry used to be a button wired to nothing: the error screen told
+    // the reader to "enter it manually" and there was no field to enter it in.
+    var manualEntry by remember { mutableStateOf(false) }
+    var manualIsbn by remember { mutableStateOf("") }
     // Null means "no explicit pick yet", so the suggestion can still arrive
     // after the catalog loads without clobbering a chip the user has tapped.
     var pickedMediaTypeId by remember(phase.isbn) { mutableStateOf<String?>(null) }
@@ -142,10 +147,101 @@ fun ScanResultView(
                 message = describeOutcome(phase.outcome, phase.isbn),
                 looksLikeUpc = looksLikeUpc,
                 onScanAnother = onScanAnother,
-                onManualEntry = onManualEntry,
+                onManualEntry = { manualEntry = true },
             )
         }
     }
+
+    if (manualEntry) {
+        ManualIsbnDialog(
+            initial = manualIsbn,
+            onDismiss = { manualEntry = false },
+            onSubmit = { typed ->
+                manualIsbn = typed
+                manualEntry = false
+                onManualIsbn(typed)
+            },
+        )
+    }
+}
+
+/**
+ * Typed-ISBN entry for the "the barcode will not read" case.
+ *
+ * Validated here only for shape — ten or thirteen digits with X allowed in the
+ * tenth place — because the check digit is the server's business and a
+ * mistyped-but-well-shaped number still deserves a lookup. The scan's own
+ * normalisation runs on submit, so separators someone typed are harmless.
+ */
+@Composable
+private fun ManualIsbnDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit,
+) {
+    val colors = LocalLibrariumTheme.current.colors
+    var text by remember { mutableStateOf(initial) }
+    val cleaned = text.filter { it.isDigit() || it == 'X' || it == 'x' }.uppercase()
+    val valid = cleaned.length == 10 || cleaned.length == 13
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Enter an ISBN", color = colors.appText) },
+        text = {
+            Column {
+                Text(
+                    "The number inside the front cover, under the barcode.",
+                    color = colors.appText2,
+                    fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    placeholder = { Text("978…", color = colors.appText3, fontSize = 14.sp) },
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.accent.copy(alpha = 0.5f),
+                        unfocusedBorderColor = colors.appLine,
+                        focusedTextColor = colors.appText,
+                        unfocusedTextColor = colors.appText,
+                        cursorColor = colors.accent,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (cleaned.isNotEmpty() && !valid) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "${cleaned.length} digits — an ISBN has 10 or 13.",
+                        color = colors.bad,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Text(
+                "Look up",
+                color = if (valid) colors.accentStrong else colors.appText3,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = valid) { onSubmit(text) }
+                    .padding(8.dp),
+            )
+        },
+        dismissButton = {
+            Text(
+                "Cancel",
+                color = colors.appText2,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onDismiss() }
+                    .padding(8.dp),
+            )
+        },
+        containerColor = colors.appCard,
+    )
 }
 
 /**

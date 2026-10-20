@@ -250,8 +250,7 @@ class CollectionViewModel(
         }
     }
 
-    /** Files every selected book into an existing list. */
-    fun addSelectionToList(listId: String) {
+    /** Files every selected book into an existing list. */    fun addSelectionToList(listId: String) {
         val state = _lists.value
         if (state.saving) return
         val list = state.lists.firstOrNull { it.id == listId } ?: return
@@ -300,6 +299,35 @@ class CollectionViewModel(
                     .sortedWith(compareBy({ it.isSmart }, { it.name })),
             )
             writeSelection(client, list)
+        }
+    }
+
+    /**
+     * Deletes a list, from the Lists face.
+     *
+     * Only manual lists are offered by that face, and a permanent built-in is
+     * not one of them, so the server's "that list ships with Librarium" 409 is
+     * not reachable from here — if it ever is, its sentence is what the user
+     * sees.
+     */
+    fun deleteList(listId: String) {
+        val target = _lists.value.lists.firstOrNull { it.id == listId } ?: return
+        viewModelScope.launch {
+            val client = container.activeClient()
+                ?: run {
+                    _lists.value = _lists.value.copy(error = "Not signed in.")
+                    return@launch
+                }
+            _lists.value = _lists.value.copy(error = null)
+            try {
+                client.deleteList(target.id)
+                _lists.value = _lists.value.copy(
+                    lists = _lists.value.lists.filterNot { it.id == target.id },
+                    message = "Deleted ${target.name}",
+                )
+            } catch (e: Exception) {
+                _lists.value = _lists.value.copy(error = e.describe())
+            }
         }
     }
 

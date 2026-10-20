@@ -89,6 +89,7 @@ fun CollectionScreen(
     onOpenSeries: (Series) -> Unit,
     onOpenAuthor: (Author) -> Unit,
     onOpenList: (SavedList) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val theme = LocalLibrariumTheme.current
     val colors = theme.colors
@@ -202,6 +203,8 @@ fun CollectionScreen(
                     CollectionSurface.LISTS -> ListsPane(
                         state = lists,
                         onOpenList = onOpenList,
+                        onDeleteList = viewModel::deleteList,
+                        onClearMessage = viewModel::clearListsMessage,
                     )
                 }
             }
@@ -234,6 +237,10 @@ fun CollectionScreen(
                 onScan = {
                     drawerOpen = false
                     onScan()
+                },
+                onSettings = {
+                    drawerOpen = false
+                    onOpenSettings()
                 },
                 onClose = { drawerOpen = false },
             )
@@ -307,6 +314,22 @@ private fun BooksPane(
                 },
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
+                trailingIcon = {
+                    if (state.search.isNotEmpty()) {
+                        // Clearing is routine on a search field; reaching for
+                        // the keyboard's ✕ or backspacing a whole title is the
+                        // friction this removes.
+                        Text(
+                            "✕",
+                            color = colors.appText3,
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable { viewModel.setBooksSearch("") }
+                                .padding(8.dp),
+                        )
+                    }
+                },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = colors.accent.copy(alpha = 0.5f),
                     unfocusedBorderColor = colors.appLine,
@@ -440,6 +463,7 @@ private fun CollectionDrawer(
     surface: CollectionSurface,
     onSurface: (CollectionSurface) -> Unit,
     onScan: () -> Unit,
+    onSettings: () -> Unit,
     onClose: () -> Unit,
 ) {
     val colors = LocalLibrariumTheme.current.colors
@@ -507,6 +531,20 @@ private fun CollectionDrawer(
                 Text("Scan a book", color = colors.accentStrong, fontSize = 15.sp)
             }
             Spacer(Modifier.weight(1f))
+
+            // Settings sits at the bottom of the rail, like a footer: it is
+            // about the account rather than about the collection.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSettings() }
+                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("⚙", color = colors.appText2, fontSize = 17.sp)
+                Spacer(Modifier.width(14.dp))
+                Text("Settings", color = colors.appText2, fontSize = 15.sp)
+            }
             Text(
                 // The manifest's versionName: what a release job stamped, so a
                 // sideloaded build can be identified from inside the app.
@@ -1373,11 +1411,21 @@ private fun AuthorsPane(
 private fun ListsPane(
     state: ListsState,
     onOpenList: (SavedList) -> Unit,
+    onDeleteList: (String) -> Unit,
+    onClearMessage: () -> Unit,
 ) {
     val colors = LocalLibrariumTheme.current.colors
     val addable = state.listsAddableTo()
+    var pendingDelete by remember { mutableStateOf<SavedList?>(null) }
 
     Column(Modifier.fillMaxSize()) {
+        if (state.message != null) {
+            LaunchedEffect(state.message) {
+                kotlinx.coroutines.delay(3500)
+                onClearMessage()
+            }
+            MessagePill(state.message)
+        }
         when {
             state.error != null && addable.isEmpty() -> EmptyPane(state.error ?: "")
             !state.loaded && state.loading -> EmptyPane("Loading…")
@@ -1391,15 +1439,55 @@ private fun ListsPane(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(addable, key = { it.id }) { list ->
-                    ListCard(list, onClick = { onOpenList(list) })
+                    ListCard(
+                        list = list,
+                        onClick = { onOpenList(list) },
+                        onDelete = { pendingDelete = list },
+                    )
                 }
             }
         }
     }
+
+    pendingDelete?.let { doomed ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete “${doomed.name}”?", color = colors.appText) },
+            text = {
+                Text(
+                    "The list is removed. The books on it stay in your library.",
+                    color = colors.appText2,
+                )
+            },
+            confirmButton = {
+                Text(
+                    "Delete",
+                    color = colors.bad,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clickable {
+                            pendingDelete = null
+                            onDeleteList(doomed.id)
+                        }
+                        .padding(8.dp),
+                )
+            },
+            dismissButton = {
+                Text(
+                    "Cancel",
+                    color = colors.appText2,
+                    modifier = Modifier
+                        .clickable { pendingDelete = null }
+                        .padding(8.dp),
+                )
+            },
+            containerColor = colors.appCard,
+        )
+    }
 }
 
 @Composable
-private fun ListCard(list: SavedList, onClick: () -> Unit) {
+private fun ListCard(list: SavedList, onClick: () -> Unit, onDelete: () -> Unit) {
     val colors = LocalLibrariumTheme.current.colors
     Row(
         modifier = Modifier
@@ -1440,6 +1528,17 @@ private fun ListCard(list: SavedList, onClick: () -> Unit) {
                 fontSize = 11.sp,
             )
         }
+        Text(
+            "✕",
+            color = colors.appText3,
+            fontSize = 13.sp,
+            modifier = Modifier
+                .clip(CircleShape)
+                // Its own tap target, outside the row's: deleting is not what a
+                // tap on the card is for.
+                .clickable { onDelete() }
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+        )
         Text("›", color = colors.appText3, fontSize = 16.sp)
     }
 }

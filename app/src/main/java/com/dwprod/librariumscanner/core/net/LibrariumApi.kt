@@ -156,6 +156,16 @@ class LibrariumApi(
     suspend fun delete(path: String) = exchangeVoid("DELETE", path, null)
 
     /**
+     * A GET whose answer is not wrapped in the `{"data": …}` envelope.
+     *
+     * Exactly one endpoint needs this: `/health` answers `{status, version,
+     * …}` as a bare object so a client can ask what it is talking to before it
+     * has a token. Everything else goes through [get].
+     */
+    suspend fun getText(path: String): String =
+        exchangeRaw("GET", path, null).decodeToString()
+
+    /**
      * A POST whose route takes no payload.
      *
      * OkHttp refuses `method("POST", null)` outright — "method POST must have a
