@@ -58,11 +58,19 @@ jobs:
         shell: bash
         run: |
           # compileSdk 37 is required by the AAR metadata of compose/coil/
-          # navigation. AGP can fetch build-tools itself, but the platform has
-          # to be present (or explicitly requested) before the build starts.
+          # navigation. Platforms use the minor-version ids now: the package is
+          # `platforms;android-37.0`, not `platforms;android-37`. The default
+          # channel carries it; the preview-channel retry is only a fallback
+          # for the day it moves.
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-37" > /dev/null 2>&1 || \
-            echo "::warning::platforms;android-37 was not offered by the SDK repository; letting AGP resolve it"
+          install() {
+            pkg="$1"
+            sdkmanager "$pkg" > /dev/null 2>&1 && return 0
+            sdkmanager --channel=3 "$pkg" > /dev/null 2>&1 && return 0
+            echo "::warning::$pkg was not offered by the SDK repository"
+          }
+          install "platforms;android-37.0"
+          install "build-tools;37.0.0"
 
       - name: Work out the version
         id: version
