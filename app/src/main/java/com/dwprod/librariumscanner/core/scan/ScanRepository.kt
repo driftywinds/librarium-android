@@ -138,20 +138,9 @@ class ScanRepository(private val lookup: IsbnLookupService) {
             subtitle = lookupResult.subtitle,
             mediaTypeId = mediaTypeId ?: "",
             description = lookupResult.description,
-            // The lookup's author strings ride in as name-contributors: the
-            // server's create contract accepts `name` instead of
-            // `contributor_id` and finds-or-creates the person
-            // (`internal/api/handlers/books.go`). An empty role defaults to
-            // "author" server-side; sending nothing here kept the book
-            // authorless and the authors page empty after every scan.
-            contributors = lookupResult.authors.mapIndexed { i, name ->
-                ContributorInput(
-                    contributorId = "",
-                    role = "author",
-                    displayOrder = i,
-                    name = name,
-                )
-            },
+            // The lookup's author strings have to become contributor ids before
+            // they can ride in: see [resolveContributors].
+            contributors = resolveContributors(api, lookupResult.authors),
             tagIds = tagIds,
             genreIds = genreIds,
             edition = CreateEditionRequest(
@@ -172,6 +161,19 @@ class ScanRepository(private val lookup: IsbnLookupService) {
 
         val book = try {
             api.createBook(library.id, body)
+        } catch (e: ApiException.Server) {
+            // Belt and braces for an instance old enough to refuse contributor
+            // rows outright: landing the book without its authors is a thing
+            // the user can fix by editing, a failed add is not.
+            if (body.contributors.isNotEmpty() && e.body?.contains("contributor") == true) {
+                try {
+                    api.createBook(library.id, body.copy(contributors = emptyList()))
+                } catch (e2: ApiException) {
+                    return AddOutcome.Failure(e2.display)
+                }
+            } else {
+                return AddOutcome.Failure(e.display)
+            }
         } catch (e: ApiException) {
             return AddOutcome.Failure(e.display)
         }
@@ -200,5 +202,65 @@ class ScanRepository(private val lookup: IsbnLookupService) {
         }
 
         return AddOutcome.Added(book, coverFetched)
+    }
+
+    /**
+     * Author names from the lookup, as contributor rows with real ids.
+     *
+     * The create body does **not** accept names on the server release this ships
+     * against: v26.9.0's `bookRequestBody` has no `name` field, and
+     * `decodeBookRequest` parses every entry's `contributor_id` as a UUID and
+     * answers 400 "invalid contributor_id" otherwise
+     * (`internal/api/handlers/books.go`, checked against the v26.9.0 tag). The
+     * named-contributor path is newer than that release, so names are resolved
+     * here instead, through the endpoints that release does expose:
+     * `GET /api/v1/contributors?q=` (an ILIKE search, exact match preferred)
+     * and `POST /api/v1/contributors` (create by name) — see
+     * [com.dwprod.librariumscanner.core.remote.LibrariumApi2.contributors].
+     *
+     * Both vintages accept ids, so doing the resolution client-side keeps the
+     * authors working on old and new servers alike. A name that cannot be
+     * resolved is skipped rather than failing the add.
+     */
+    private suspend fun resolveContributors(
+        api: LibrariumApi2,
+        authors: List<String>,
+    ): List<ContributorInput> {
+        val names = authors
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+            .take(MAX_AUTHORS)
+        val rows = mutableListOf<ContributorInput>()
+        for (name in names) {
+            val id = findOrCreateContributor(api, name) ?: continue
+            // `author` is a seeded role code (`db/migrations/000025…`).
+            rows += ContributorInput(
+                contributorId = id,
+                role = "author",
+                displayOrder = rows.size,
+            )
+        }
+        return rows
+    }
+
+    /**
+     * Exact-name search first, create second.
+     *
+     * The search is a substring match ordered by name, so a name that is merely
+     * contained in a longer one must not be taken as a hit — crediting "Herbert"
+     * to "Frank Herbert" would be wrong, and a second person with the same name
+     * is the lesser error.
+     */
+    private suspend fun findOrCreateContributor(api: LibrariumApi2, name: String): String? = try {
+        api.contributors(name).firstOrNull { it.name.equals(name, ignoreCase = true) }?.id
+            ?: api.createContributor(name).id
+    } catch (_: Exception) {
+        null
+    }
+
+    /** A generous cap: a comic can credit a handful of people, not a page. */
+    private companion object {
+        const val MAX_AUTHORS = 10
     }
 }
