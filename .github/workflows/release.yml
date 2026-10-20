@@ -39,17 +39,30 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default package list is "tools platform-tools"; the
+          # legacy `tools` package is gone from the SDK repository, so asking
+          # for it fails the step with "Failed to find package 'tools'" before
+          # Gradle ever runs. platform-tools is all this needs from the action.
+          packages: platform-tools
+          accept-android-sdk-licenses: true
 
-      - name: Accept SDK licences
-        # Lets AGP install any missing platform/build-tools on first use.
-        run: yes | sdkmanager --licenses > /dev/null || true
+      - name: Install the compile SDK
+        shell: bash
+        run: |
+          # compileSdk 37 is required by the AAR metadata of compose/coil/
+          # navigation. AGP can fetch build-tools itself, but the platform has
+          # to be present (or explicitly requested) before the build starts.
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-37" > /dev/null 2>&1 || \
+            echo "::warning::platforms;android-37 was not offered by the SDK repository; letting AGP resolve it"
 
       - name: Work out the version
         id: version
