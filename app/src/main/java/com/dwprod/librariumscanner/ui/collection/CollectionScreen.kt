@@ -43,6 +43,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -70,6 +71,7 @@ import com.dwprod.librariumscanner.core.model.Series
 import com.dwprod.librariumscanner.core.remote.BookSortField
 import com.dwprod.librariumscanner.core.remote.BrowseFacet
 import com.dwprod.librariumscanner.ui.theme.LocalLibrariumTheme
+import kotlinx.coroutines.launch
 
 /**
  * The collection shell: three faces behind a hamburger drawer.
@@ -130,19 +132,21 @@ fun CollectionScreen(
         }
     }
 
-    // The rail's tick and the pager stay one state: a rail tap pages, a swipe
-    // ticks the rail. iOS changes faces by replacing content; on a phone the
-    // pager keeps the panes' scroll positions alive across a drawer flip.
-    LaunchedEffect(surface) {
-        if (pagerState.currentPage != surface.ordinal) {
-            pagerState.scrollToPage(surface.ordinal)
-        }
-    }
+    // The pager is the only thing that scrolls; the drawer asks it to, once.
+    //
+    // This used to be two effects: this screen scrolled to `surface.ordinal`
+    // whenever the view model's tick changed, and a sibling effect reported the
+    // pager's page back as the tick. A tap that changed the tick while a
+    // previous `scrollToPage` was still suspended restarted the effect, and the
+    // cancelled scroll could leave the pager between pages with nothing drawn —
+    // a blank, unresponsive screen. One direction of travel removes the race.
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }.collect { page ->
             viewModel.setSurface(CollectionSurface.entries[page])
         }
     }
+    val drawerScope = rememberCoroutineScope()
+    var pagerJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     Box(Modifier.fillMaxSize().background(colors.appBackground)) {
         Column(Modifier.fillMaxSize()) {
@@ -217,8 +221,15 @@ fun CollectionScreen(
             CollectionDrawer(
                 surface = surface,
                 onSurface = { s ->
-                    viewModel.setSurface(s)
                     drawerOpen = false
+                    viewModel.setSurface(s)
+                    // One scroll, owned here: a second tap cancels the previous
+                    // scroll rather than racing it, so the pager always lands
+                    // on a real page.
+                    pagerJob?.cancel()
+                    pagerJob = drawerScope.launch {
+                        runCatching { pagerState.scrollToPage(s.ordinal) }
+                    }
                 },
                 onScan = {
                     drawerOpen = false

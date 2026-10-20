@@ -61,6 +61,7 @@ fun BookDetailScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val book = state.book
     var confirmDelete by remember { mutableStateOf(false) }
+    var showReview by remember { mutableStateOf(false) }
 
     // The edit sheet writes through its own routes (fields, cover, edition,
     // series) and the detail screen is not recomposed by that — it is still on
@@ -201,7 +202,73 @@ fun BookDetailScreen(
 
                 Spacer(Modifier.height(20.dp))
 
-                // ---- description --------------------------------------------
+                // ---- personal: favourite, rating, review ---------------------
+                // iOS spreads these across a rate sheet, a review sheet and a
+                // context menu; every one of them is the same partial write, so
+                // a phone puts them together.
+                SectionLabel("Personal")
+                val favourite = state.myBook?.isFavorite == true
+                val rating = state.myBook?.rating
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(theme.radius.chip))
+                            .background(
+                                if (favourite) colors.accent.copy(alpha = 0.22f) else colors.appCard
+                            )
+                            .activate { viewModel.toggleFavourite() }
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                    ) {
+                        Text(
+                            if (favourite) "♥ Favourite" else "♡ Favourite",
+                            color = if (favourite) colors.accent else colors.appText2,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Row {
+                        (0 until 5).forEach { index ->
+                            val threshold = (index + 1) * 2.0
+                            val filled = (rating ?: 0.0) >= threshold - 1.0
+                            Text(
+                                "★",
+                                color = if (filled) colors.accent else colors.appLineStrong,
+                                fontSize = 20.sp,
+                                modifier = Modifier
+                                    .activate { viewModel.setRating(threshold) }
+                                    .padding(horizontal = 2.dp),
+                            )
+                        }
+                    }
+                    if (rating != null) {
+                        Text(
+                            "${rating.toInt()}/10",
+                            color = colors.appText3,
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .activate { viewModel.setRating(null) }
+                                .padding(4.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    if ((state.myBook?.review ?: "").isNotBlank() ||
+                        (state.myBook?.notes ?: "").isNotBlank()
+                    ) "Edit review & notes" else "Write a review",
+                    color = colors.accentStrong,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .activate { showReview = true }
+                        .padding(vertical = 6.dp),
+                )
+
+                Spacer(Modifier.height(20.dp))
                 if (book.description.isNotBlank()) {
                     SectionLabel("Description")
                     Text(
@@ -273,6 +340,92 @@ fun BookDetailScreen(
             containerColor = colors.appCard,
         )
     }
+
+    if (showReview) {
+        ReviewDialog(
+            initialReview = state.myBook?.review.orEmpty(),
+            initialNotes = state.myBook?.notes.orEmpty(),
+            onSave = { review, notes ->
+                showReview = false
+                viewModel.saveReview(review, notes)
+            },
+            onDismiss = { showReview = false },
+        )
+    }
+}
+
+/**
+ * The public review and the private note, kept separate.
+ *
+ * iOS has a `ReviewSheet` for this; the separation is the point — one is
+ * shown to other readers of the library, the other never leaves the account.
+ */
+@Composable
+private fun ReviewDialog(
+    initialReview: String,
+    initialNotes: String,
+    onSave: (String, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = LocalLibrariumTheme.current.colors
+    var review by remember { mutableStateOf(initialReview) }
+    var notes by remember { mutableStateOf(initialNotes) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Review & notes", color = colors.appText) },
+        text = {
+            Column {
+                androidx.compose.material3.OutlinedTextField(
+                    value = review,
+                    onValueChange = { review = it },
+                    label = { Text("Public review", color = colors.appText3, fontSize = 12.sp) },
+                    minLines = 3,
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.accent.copy(alpha = 0.5f),
+                        unfocusedBorderColor = colors.appLine,
+                        focusedTextColor = colors.appText,
+                        unfocusedTextColor = colors.appText,
+                        cursorColor = colors.accent,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(10.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Private note", color = colors.appText3, fontSize = 12.sp) },
+                    minLines = 3,
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.accent.copy(alpha = 0.5f),
+                        unfocusedBorderColor = colors.appLine,
+                        focusedTextColor = colors.appText,
+                        unfocusedTextColor = colors.appText,
+                        cursorColor = colors.accent,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Text(
+                "Save",
+                color = colors.accentStrong,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .activate { onSave(review, notes) }
+                    .padding(8.dp),
+            )
+        },
+        dismissButton = {
+            Text(
+                "Cancel",
+                color = colors.appText2,
+                modifier = Modifier.activate { onDismiss() }.padding(8.dp),
+            )
+        },
+        containerColor = colors.appCard,
+    )
 }
 
 private fun positionText(p: Double): String =

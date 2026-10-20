@@ -136,6 +136,87 @@ class BookDetailViewModel(
         }
     }
 
+    /**
+     * Rating, favourite and review, all through the one partial-update route.
+     *
+     * They share [updateMyBook] because the api treats them as one row: the
+     * iOS equivalent spreads them across a rate sheet, a review sheet and a
+     * context-menu toggle, but every write is `PUT /books/{id}/me` with the
+     * field being changed. Optimistic like the status chips, with rollback so
+     * a failed write does not leave the screen telling a lie.
+     */
+    fun setRating(rating: Double?) {
+        val client = container.activeClient() ?: return
+        val previous = _state.value.myBook
+        _state.value = _state.value.copy(
+            patching = true,
+            myBook = previous?.copy(rating = rating) ?: MyBook(rating = rating),
+        )
+        viewModelScope.launch {
+            try {
+                val updated = client.updateMyBook(
+                    bookIdArg,
+                    UpdateMyBookRequest(rating = rating, clearRating = rating == null),
+                )
+                _state.value = _state.value.copy(myBook = updated, patching = false)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    patching = false,
+                    myBook = previous,
+                    error = (e as? ApiException)?.display ?: e.message,
+                )
+            }
+        }
+    }
+
+    fun toggleFavourite() {
+        val client = container.activeClient() ?: return
+        val previous = _state.value.myBook
+        val next = !(previous?.isFavorite ?: false)
+        _state.value = _state.value.copy(
+            patching = true,
+            myBook = previous?.copy(isFavorite = next) ?: MyBook(isFavorite = next),
+        )
+        viewModelScope.launch {
+            try {
+                val updated = client.updateMyBook(bookIdArg, UpdateMyBookRequest(isFavorite = next))
+                _state.value = _state.value.copy(myBook = updated, patching = false)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    patching = false,
+                    myBook = previous,
+                    error = (e as? ApiException)?.display ?: e.message,
+                )
+            }
+        }
+    }
+
+    /** Keeps the public review and the private note apart, as iOS does. */
+    fun saveReview(review: String, notes: String) {
+        val client = container.activeClient() ?: return
+        val previous = _state.value.myBook
+        _state.value = _state.value.copy(
+            patching = true,
+            myBook = previous?.copy(review = review, notes = notes)
+                ?: MyBook(review = review, notes = notes),
+        )
+        viewModelScope.launch {
+            try {
+                val updated = client.updateMyBook(
+                    bookIdArg,
+                    UpdateMyBookRequest(review = review, notes = notes),
+                )
+                _state.value = _state.value.copy(myBook = updated, patching = false)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    patching = false,
+                    myBook = previous,
+                    error = (e as? ApiException)?.display ?: e.message,
+                )
+            }
+        }
+    }
+
     fun delete() {
         val client = container.activeClient() ?: return
         val lib = _state.value.libraryId

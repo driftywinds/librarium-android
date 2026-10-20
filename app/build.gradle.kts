@@ -59,8 +59,21 @@ android {
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            /**
+             * Off for now, on purpose.
+             *
+             * The minified release crashed the scanner while the debug build
+             * (same code, same ML Kit/CameraX classes — R8 kept them) did not,
+             * and there is no stack trace from a sideloaded build to retrace.
+             * A release nobody can scan with is worse than a larger APK, so
+             * the variant ships unminified until the failure is pinned down.
+             *
+             * `-PminifyRelease=true` builds the shrunken variant for a
+             * diagnostic install; the keep rules live in proguard-rules.pro.
+             */
+            val shrink = (project.findProperty("minifyRelease") as String?)?.toBoolean() ?: false
+            isMinifyEnabled = shrink
+            isShrinkResources = shrink
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
