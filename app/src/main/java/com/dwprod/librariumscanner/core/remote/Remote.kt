@@ -51,6 +51,32 @@ internal fun enc(raw: String): String =
 /** Serializer for the `{"items": [...]}` collection shape. */
 fun <T> ItemsSerializer(item: KSerializer<T>) = ItemsPage.serializer(item)
 
+/**
+ * The sorts the books list takes, ported one for one from `BookSortOption`
+ * (`BooksViewModel.swift:6-39`) — `field` and `dir` are the wire values the
+ * API parses, and the pairs are the API's vocabulary, not a UI concern.
+ */
+enum class BookSortField(val field: String, val dir: String) {
+    TITLE_ASC("title", "asc"),
+    TITLE_DESC("title", "desc"),
+    AUTHOR_ASC("author", "asc"),
+    AUTHOR_DESC("author", "desc"),
+    RECENTLY_ADDED("created_at", "desc"),
+    OLDEST_ADDED("created_at", "asc"),
+    NEWEST_RELEASE("publish_date", "desc"),
+    OLDEST_RELEASE("publish_date", "asc"),
+}
+
+/**
+ * The series index's sorts. The recent field is `publication_year` on the wire
+ * and the name sort has no `dir` counterpart the server honours, so only the
+ * two the layer actually sends are modelled.
+ */
+enum class SeriesSortField(val field: String, val dir: String) {
+    NAME("name", "asc"),
+    RECENT("publication_year", "desc"),
+}
+
 // ---------------------------------------------------------------- requests
 
 /**
@@ -512,7 +538,68 @@ class LibrariumApi2(private val api: LibrariumApi) {
         return api.get(path, BookFacets.serializer())
     }
 
-    suspend fun grouped(query: String, page: Int): GroupedPage =
+    /**
+     * The person-scoped book list, narrowed by any of the eleven browse
+     * dimensions.
+     *
+     * Port of `MeBrowseService.books` (`MeBrowseService.swift:31-40`). The
+     * parameters go through as one pre-built query string the caller composes
+     * with [BrowseQuery], because the facet vocabulary is shared by the list,
+     * the grouped list and the counts, and each would otherwise drift:
+     * [BrowseQuery.queryString] is that one serialisation, byte for byte the
+     * same the three calls send.
+     */
+    suspend fun browseBooks(query: String, page: Int, perPage: Int, sort: BookSortField): Paged<Book> =
+        api.get(
+            "/api/v1/me/books?${query}${pageQuery(page, perPage)}sort=${sort.field}&sort_dir=${sort.dir}",
+            Paged.serializer(Book.serializer()),
+        )
+
+    /**
+     * The same list with each run collapsed into one row — port of
+     * `MeBrowseService.grouped` (`MeBrowseService.swift:47-56`).
+     */
+    suspend fun browseGrouped(query: String, page: Int, perPage: Int, sort: BookSortField): GroupedPage =
+        api.get(
+            "/api/v1/me/books/grouped?${query}${pageQuery(page, perPage)}sort=${sort.field}&sort_dir=${sort.dir}",
+            GroupedPage.serializer(),
+        )
+
+    /**
+     * Counts per facet value, sent with the *same* selection as the list but
+     * with that facet excluded from its own count — the server does the
+     * excluding (each dimension is counted with its own selection removed so a
+     * zero-count value can be offered). Port of `MeBrowseService.facets`
+     * (`MeBrowseService.swift:64-74`); the double envelope is handled inside
+     * `decodeEnvelope`.
+     */
+    suspend fun browseFacets(query: String): BookFacets =
+        api.get("/api/v1/me/books/facets?$query", BookFacets.serializer())
+
+    /**
+     * The person-scoped series index with its own facets — port of the
+     * `/me/series/index` call behind `RedesignedSeriesListView`. Takes the
+     * whole query string for the same reason [browseBooks] does.
+     */
+    suspend fun browseSeries(query: String, page: Int, sort: SeriesSortField): SeriesIndexPage =
+        api.get(
+            "/api/v1/me/series/index?${query}volumes=1&page=$page&sort=${sort.field}&dir=${sort.dir}",
+            SeriesIndexPage.serializer(),
+        )
+
+    /**
+     * The person-scoped author index. No paging on the wire: the server pages
+     * it, so the client sends `page` only when it means it (matching
+     * `MeBrowseService`'s author call, which sends none of these).
+     */
+    suspend fun browseAuthors(libraryId: String, query: String = "", role: String = ""): AuthorIndexPage =
+        authorsIndex(libraryId, query, role)
+
+    private fun pageQuery(page: Int, perPage: Int): String =
+        "page=$page&per_page=$perPage&"
+
+    /** The grouped list already has its own method; keep them apart. */
+    suspend fun groupedLegacy(query: String, page: Int): GroupedPage =
         api.get("/api/v1/me/books/grouped?q=$query&page=$page", GroupedPage.serializer())
 
     /** Bare array. */

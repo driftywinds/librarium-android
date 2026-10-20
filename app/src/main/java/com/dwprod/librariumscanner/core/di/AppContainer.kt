@@ -45,15 +45,19 @@ class AppContainer(context: Context) {
      * A client for the primary account — the one global flows (scan, dashboard)
      * use. Null when nobody is signed in.
      */
-    suspend fun primaryClient(): LibrariumApi2? =
+    fun primaryClient(): LibrariumApi2? =
         accountManager.primary?.let { accountManager.clientFor(it) }
 
     /**
      * A client for the account the user has open, when signed in and valid.
      * Re-auth state short-circuits: a client whose tokens are gone cannot be
      * refreshed by hooking it up again.
+     *
+     * Not a [kotlin.coroutines.suspend] function: every member it reads
+     * (`snapshot`, `accounts`, `clientFor`) is a plain property/function, so
+     * view models can grab a client synchronously before launching work.
      */
-    suspend fun activeClient(): LibrariumApi2? {
+    fun activeClient(): LibrariumApi2? {
         val id = accountManager.snapshot.activeAccountId ?: return primaryClient()
         val account = accountManager.accounts.firstOrNull { it.id == id } ?: return primaryClient()
         if (account.needsReauth) return null
