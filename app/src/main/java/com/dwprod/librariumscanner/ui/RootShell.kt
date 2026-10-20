@@ -170,12 +170,10 @@ private fun ShellNavigate(container: AppContainer) {
             }
 
             composable("edit") {
-                // The form state was seeded by the caller (detail's edit
-                // button); re-seeding here would wipe typed text on rotation.
+                // The form was seeded by the caller (detail's edit button);
+                // re-seeding here would wipe typed text and the server values.
                 BookEditScreen(
                     viewModel = editVm,
-                    editing = null,
-                    libraryId = "",
                     onSaved = { _ ->
                         collectionVm.tickReload()
                         nav.popBackStack()

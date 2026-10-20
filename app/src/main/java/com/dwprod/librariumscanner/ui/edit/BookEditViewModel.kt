@@ -36,6 +36,8 @@ data class BookFormState(
     val selectedTagIds: Set<String> = emptySet(),
     val selectedGenreIds: Set<String> = emptySet(),
     val contributors: List<BookContributor> = emptyList(),
+    /** Set while a typed author name is being resolved or created. */
+    val contributorBusy: Boolean = false,
     val saving: Boolean = false,
     val error: String? = null,
     /** Set with the saved book when the write lands. */
@@ -115,34 +117,60 @@ class BookEditViewModel(
     }
 
     /**
-     * Adds or replaces a contributor row. Name → contributor id happens on the
-     * server's own search (`contributors?q=`), matching what the iOS sheet
-     * does with `ContributorField` (`AddEditBookSheet.swift:355-401`).
+     * Credits an author typed into the form.
+     *
+     * The create/update body takes contributor **ids**, so a typed name has to
+     * become a person first. Exact-name search, then create when nobody on the
+     * instance answers to it — verified against the running server: any signed-in
+     * caller may create a contributor (`POST /api/v1/contributors` is behind
+     * plain auth on 26.9.0), and updating a book with the resulting id returns
+     * 200.
      */
-    fun resolveContributor(name: String, role: String, displayOrder: Int, onResolved: (Boolean) -> Unit) {
-        val client = container.activeClient() ?: run { onResolved(false); return }
+    fun addContributor(name: String) {
+        val clean = name.trim()
+        if (clean.isEmpty() || _state.value.contributorBusy) return
+        val client = container.activeClient() ?: run {
+            _state.value = _state.value.copy(error = "Not signed in.")
+            return
+        }
         viewModelScope.launch {
+            _state.value = _state.value.copy(contributorBusy = true, error = null)
             try {
-                val hit = client.contributors(name.trim())
-                    .firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
-                if (hit == null) {
-                    // Not on file; the sheet offers to create the person.
-                    onResolved(false)
+                val person = client.contributors(clean)
+                    .firstOrNull { it.name.equals(clean, ignoreCase = true) }
+                    ?: client.createContributor(clean)
+                val current = _state.value.contributors
+                if (current.any { it.contributorId == person.id }) {
+                    _state.value = _state.value.copy(
+                        contributorBusy = false,
+                        error = "${person.name} is already credited.",
+                    )
                     return@launch
                 }
-                val row = BookContributor(
-                    contributorId = hit.id,
-                    name = hit.name,
-                    role = role,
-                    displayOrder = displayOrder,
+                _state.value = _state.value.copy(
+                    contributorBusy = false,
+                    contributors = current + BookContributor(
+                        contributorId = person.id,
+                        name = person.name,
+                        role = "author",
+                        displayOrder = current.size,
+                    ),
                 )
-                val others = _state.value.contributors.filterNot { it.contributorId == hit.id }
-                _state.value = _state.value.copy(contributors = others + row)
-                onResolved(true)
-            } catch (_: Exception) {
-                onResolved(false)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    contributorBusy = false,
+                    error = (e as? ApiException)?.display ?: e.message,
+                )
             }
         }
+    }
+
+    /** Drops a credit and closes the gap its display order leaves behind. */
+    fun removeContributor(contributorId: String) {
+        val rest = _state.value.contributors
+            .filterNot { it.contributorId == contributorId }
+            .mapIndexed { index, row -> row.copy(displayOrder = index) }
+        _state.value = _state.value.copy(contributors = rest)
     }
 
     /** Builds and sends exactly the request the mapping above produces. */

@@ -6,8 +6,9 @@ package com.dwprod.librariumscanner.ui.edit
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,13 +17,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,15 +40,19 @@ import com.dwprod.librariumscanner.ui.theme.LocalLibrariumTheme
 
 /**
  * The add/edit form, port of `AddEditBookSheet`'s field order: title,
- * subtitle, media type, description, then the vocabularies (tags, genres).
- * Edition fields are create-time-only on iOS and are owned by the scan flow
- * here, so they do not appear (`AddEditBookSheet.swift:150-205`).
+ * subtitle, media type, description, then the vocabularies (tags, genres) and
+ * the credits.
+ *
+ * The form is seeded by whoever opens it — `BookEditViewModel.startEdit` from
+ * the detail screen, `startCreate` from anywhere else. It deliberately does not
+ * seed itself on composition: the shell-scoped view model is filled *before*
+ * navigation, and re-seeding from an `editing` argument that the route does not
+ * carry wiped every field the caller had just put in.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BookEditScreen(
     viewModel: BookEditViewModel,
-    editing: Book?,
-    libraryId: String,
     onSaved: (Book) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -55,13 +60,11 @@ fun BookEditScreen(
     val colors = theme.colors
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    androidx.compose.runtime.LaunchedEffect(editing, libraryId) {
-        viewModel.loadVocabularies()
-        if (editing != null) viewModel.startEdit(editing, libraryId)
-        else viewModel.startCreate(libraryId)
-    }
+    // Vocabularies are a read, not form state: loading them again must not
+    // touch what the reader has typed.
+    LaunchedEffect(Unit) { viewModel.loadVocabularies() }
 
-    androidx.compose.runtime.LaunchedEffect(state.saved) {
+    LaunchedEffect(state.saved) {
         state.saved?.let { onSaved(it) }
     }
 
@@ -110,32 +113,31 @@ fun BookEditScreen(
         Field(value = state.subtitle, on = viewModel::setSubtitle, hint = "Optional")
 
         FieldLabel("Media type")
-        // Inline chips rather than a picker sheet, per the scan screen's
-        // documented parity decision — same control, same vocabulary.
-        Row(
-            Modifier
+        // Chips wrap: the catalogue has 20 rows on the instance this ships
+        // against, and a single `Row` squeezed the tail past the edge and broke
+        // the last label into a vertical stack of letters.
+        FlowRow(
+            modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 2.dp)
                 .background(colors.appCard, RoundedCornerShape(theme.radius.pill))
                 .padding(6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            val shown = state.mediaTypes.take(6)
-            shown.forEach { mt ->
-                val selected = state.mediaTypeId == mt.id
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(theme.radius.chip))
-                        .background(if (selected) colors.accent.copy(alpha = 0.25f) else colors.appBackground)
-                        .clickable { viewModel.setMediaTypeId(mt.id) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    Text(
-                        mt.displayName.ifEmpty { mt.name },
-                        color = if (selected) colors.accent else colors.appText2,
-                        fontSize = 12.sp,
-                    )
-                }
+            if (state.mediaTypes.isEmpty()) {
+                Text(
+                    "Loading…",
+                    color = colors.appText3,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(4.dp),
+                )
+            }
+            state.mediaTypes.forEach { mt ->
+                SelectableChip(
+                    label = mt.displayName.ifEmpty { mt.name },
+                    selected = state.mediaTypeId == mt.id,
+                    onClick = { viewModel.setMediaTypeId(mt.id) },
+                )
             }
         }
 
@@ -147,39 +149,127 @@ fun BookEditScreen(
             minLines = 5,
         )
 
-        FieldLabel("Tags")
-        ChipFlow(
-            entries = state.tags.map { it.id to (it.name) },
-            selected = state.selectedTagIds,
-            onToggle = viewModel::toggleTag,
-        )
-
-        FieldLabel("Genres")
-        ChipFlow(
-            entries = state.genres.map { it.id to it.name },
-            selected = state.selectedGenreIds,
-            onToggle = viewModel::toggleGenre,
-        )
-
         FieldLabel("Authors")
-        state.contributors.forEach { c ->
+        if (state.contributors.isEmpty()) {
             Text(
-                "${c.name} · ${c.role}",
-                color = colors.appText2,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(vertical = 2.dp),
+                "No author credited yet.",
+                color = colors.appText3,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
+        state.contributors.forEach { person ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    person.name.ifBlank { "Unknown" },
+                    color = colors.appText,
+                    fontSize = 14.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    person.role.ifBlank { "author" },
+                    color = colors.appText3,
+                    fontSize = 11.sp,
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "✕",
+                    color = colors.appText3,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { viewModel.removeContributor(person.contributorId) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        }
+        var authorDraft by remember { mutableStateOf("") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = authorDraft,
+                onValueChange = { authorDraft = it },
+                placeholder = {
+                    Text("Add an author…", color = colors.appText3, fontSize = 14.sp)
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = colors.accent.copy(alpha = 0.5f),
+                    unfocusedBorderColor = colors.appLine,
+                    focusedTextColor = colors.appText,
+                    unfocusedTextColor = colors.appText,
+                    cursorColor = colors.accent,
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            val canAdd = authorDraft.isNotBlank() && !state.contributorBusy
+            Text(
+                if (state.contributorBusy) "…" else "Add",
+                color = if (canAdd) colors.accentStrong else colors.appText3,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = canAdd) {
+                        viewModel.addContributor(authorDraft)
+                        authorDraft = ""
+                    }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
             )
         }
         Text(
-            "Authors are edited on the wire via search; the scan flow fills them in.",
+            "A name that is not on this server yet is added as a new person.",
             color = colors.appText3,
             fontSize = 11.sp,
             modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
         )
 
+        FieldLabel("Tags")
+        if (state.tags.isEmpty()) {
+            Text(
+                "No tags on this server yet.",
+                color = colors.appText3,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        } else {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                state.tags.forEach { tag ->
+                    SelectableChip(
+                        label = tag.name,
+                        selected = tag.id in state.selectedTagIds,
+                        onClick = { viewModel.toggleTag(tag.id) },
+                    )
+                }
+            }
+        }
+
+        FieldLabel("Genres")
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            state.genres.forEach { genre ->
+                SelectableChip(
+                    label = genre.name,
+                    selected = genre.id in state.selectedGenreIds,
+                    onClick = { viewModel.toggleGenre(genre.id) },
+                )
+            }
+        }
+
         if (state.error != null) {
+            Spacer(Modifier.height(12.dp))
             Text(state.error ?: "", color = colors.bad, fontSize = 13.sp)
-            Spacer(Modifier.height(10.dp))
         }
 
         Spacer(Modifier.height(40.dp))
@@ -224,34 +314,21 @@ private fun Field(
     )
 }
 
-/** Horizontal wrap of toggle chips, one per vocabulary value. */
+/** One toggle chip: a media type, a tag or a genre. */
 @Composable
-private fun ChipFlow(
-    entries: List<Pair<String, String>>,
-    selected: Set<String>,
-    onToggle: (String) -> Unit,
-) {
+private fun SelectableChip(label: String, selected: Boolean, onClick: () -> Unit) {
     val colors = LocalLibrariumTheme.current.colors
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        entries.chunked(4).forEach { rowEntries ->
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                rowEntries.forEach { (id, label) ->
-                    val ticked = id in selected
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(if (ticked) colors.accent.copy(alpha = 0.25f) else colors.appCard)
-                            .clickable { onToggle(id) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                    ) {
-                        Text(
-                            label,
-                            color = if (ticked) colors.accent else colors.appText2,
-                            fontSize = 12.sp,
-                        )
-                    }
-                }
-            }
-        }
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) colors.accent.copy(alpha = 0.25f) else colors.appCard)
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Text(
+            label,
+            color = if (selected) colors.accent else colors.appText2,
+            fontSize = 12.sp,
+        )
     }
 }
