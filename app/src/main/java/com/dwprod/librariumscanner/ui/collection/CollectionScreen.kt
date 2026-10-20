@@ -497,7 +497,9 @@ private fun CollectionDrawer(
             }
             Spacer(Modifier.weight(1f))
             Text(
-                "Signed in · scanning works",
+                // The manifest's versionName: what a release job stamped, so a
+                // sideloaded build can be identified from inside the app.
+                "Signed in · v${com.dwprod.librariumscanner.BuildConfig.VERSION_NAME}",
                 color = colors.appText3,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(horizontal = 18.dp),

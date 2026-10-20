@@ -92,6 +92,15 @@ fun ServerConnectScreen(
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,
             )
+            Spacer(Modifier.height(4.dp))
+            // The build's own version, so "which APK is installed" is
+            // answerable from the phone without leaving the app. It is the
+            // manifest's versionName, i.e. exactly what a release job stamped.
+            Text(
+                "v${com.dwprod.librariumscanner.BuildConfig.VERSION_NAME}",
+                color = colors.appText3,
+                fontSize = 11.sp,
+            )
         }
 
         Spacer(Modifier.height(30.dp))

@@ -140,5 +140,8 @@ jobs:
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
+          # The version the APK was actually stamped with, so the release page
+          # and the installed app cannot disagree.
+          name: v${{ steps.version.outputs.name }}
           files: ${{ steps.artifact.outputs.path }}
           generate_release_notes: true
