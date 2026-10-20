@@ -31,11 +31,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.fireball1725.librarium.core.lookup.IsbnLookupService
 import com.fireball1725.librarium.core.model.IsbnLookupResult
 import com.fireball1725.librarium.core.model.Library
@@ -67,9 +73,14 @@ fun ScanResultView(
     onClose: () -> Unit,
     onManualEntry: () -> Unit,
     onOpenBook: (Library, String) -> Unit,
-) {
-    var selectedStatus by remember { mutableStateOf(ReadStatus.UNREAD) }
-    var selectedMediaTypeId by remember(phase.isbn) { mutableStateOf<String?>(null) }
+) {    var selectedStatus by remember { mutableStateOf(ReadStatus.UNREAD) }
+    // Null means "no explicit pick yet", so the suggestion can still arrive
+    // after the catalog loads without clobbering a chip the user has tapped.
+    var pickedMediaTypeId by remember(phase.isbn) { mutableStateOf<String?>(null) }
+    val suggestedId = remember(phase.isbn, mediaTypes, phase.found) {
+        suggestedMediaTypeId(phase.found, mediaTypes)
+    }
+    val selectedMediaTypeId = pickedMediaTypeId ?: suggestedId
 
     val theme = LocalLibrariumTheme.current
     val colors = theme.colors
@@ -106,7 +117,7 @@ fun ScanResultView(
                     selectedStatus = selectedStatus,
                     selectedMediaTypeId = selectedMediaTypeId,
                     onStatusChange = { selectedStatus = it },
-                    onMediaTypeChange = { selectedMediaTypeId = it },
+                    onMediaTypeChange = { pickedMediaTypeId = it },
                 )
                 AddCta(
                     label = ctaLabel(libraries, selectedLibraryKey, ownership),
@@ -125,6 +136,21 @@ fun ScanResultView(
         }
     }
 }
+
+/**
+ * The media type the sheet pre-selects for the book currently on screen.
+ *
+ * Delegates to the shared rule in `core/scan/MediaTypeGuess.kt`, which the add
+ * path also uses, so the highlighted chip and the value actually sent cannot
+ * disagree.
+ */
+internal fun suggestedMediaTypeId(
+    found: IsbnLookupResult?,
+    mediaTypes: List<MediaType>,
+): String? = com.fireball1725.librarium.core.scan.guessMediaTypeId(
+    categories = found?.categories,
+    types = mediaTypes,
+)
 
 /** Port of `ctaLabel` (`RedesignedScanFlow.swift:1755-1762`), word for word. */
 internal fun ctaLabel(
@@ -157,8 +183,7 @@ internal fun describeOutcome(
     is IsbnLookupService.LookupOutcome.Failed -> outcome.message
 }
 
-/** The 4 statuses the iOS scan flow offers, with their exact API values. */
-enum class ReadStatus(val apiValue: String, val label: String) {
+/** The 4 statuses the iOS scan flow offers, with their exact API values. */enum class ReadStatus(val apiValue: String, val label: String) {
     UNREAD("unread", "Unread"),
     WANT_TO_READ("want_to_read", "Want"),
     READING("reading", "Reading"),
@@ -191,19 +216,35 @@ private fun CoverHero(lookup: IsbnLookupResult) {
             .fillMaxWidth()
             .padding(horizontal = 22.dp),
     ) {
-        // Cover art arrives best-effort; the fallback keeps the sheet from
-        // reflowing when there is none.
+        // Cover art arrives best-effort; the placeholder keeps the sheet from
+        // reflowing when a provider has none, which is common for obscure
+        // editions and always the case for a manual entry.
         Box(
             modifier = Modifier
                 .size(width = 140.dp, height = 210.dp)
-                .background(colors.appCard, RoundedCornerShape(8.dp)),
+                .background(colors.appCard, RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                "No cover",
-                color = colors.appText3,
-                fontSize = theme.type.rowMeta,
-            )
+            if (lookup.coverUrl.isNotEmpty()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(lookup.coverUrl)
+                        .crossfade(true)
+                        .build(),
+                    // The book's title, not "cover": a screen reader landing
+                    // here should hear what the picture is of.
+                    contentDescription = lookup.title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text(
+                    "No cover",
+                    color = colors.appText3,
+                    fontSize = theme.type.rowMeta,
+                )
+            }
         }
         Spacer(Modifier.height(12.dp))
 

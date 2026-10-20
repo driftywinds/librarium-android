@@ -3,6 +3,7 @@
 
 package com.fireball1725.librarium.core.scan
 
+import com.fireball1725.librarium.core.model.MediaType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -15,25 +16,15 @@ import org.junit.Test
  * order it returns it: alphabetical. That ordering is the whole point — a bare
  * `firstOrNull()` fallback silently files every scanned book as "Anthology",
  * which is wrong in a way no test with a hand-picked two-item list would catch.
+ *
+ * These call the shipped [guessMediaTypeId] rather than a copy of it. An earlier
+ * revision mirrored the rule locally, which passes happily while production
+ * drifts — the exact failure mode the tests exist to prevent.
  */
 class MediaTypeGuessTest {
 
-    private data class T(val id: String, val displayName: String)
-
-    /** Mirrors `ScanViewModel.guessMediaTypeId`, kept here so the rule is testable. */
-    private fun guess(categories: List<String>?, types: List<T>): String? {
-        if (types.isEmpty()) return null
-        val cats = categories.orEmpty().map { it.lowercase() }.filter { it.isNotBlank() }
-        for (t in types) {
-            val name = t.displayName.lowercase()
-            if (name.isEmpty()) continue
-            if (cats.any { it.contains(name) || name.contains(it) }) return t.id
-        }
-        types.firstOrNull { it.displayName.lowercase() == "book" }?.let { return it.id }
-        types.firstOrNull { it.displayName.lowercase() == "novel" }?.let { return it.id }
-        types.firstOrNull { it.displayName.lowercase().contains("novel") }?.let { return it.id }
-        return types.first().id
-    }
+    private fun T(id: String, displayName: String) =
+        MediaType(id = id, name = displayName.lowercase(), displayName = displayName)
 
     /** The stock remote-api catalog, alphabetical as served. */
     private val catalogue = listOf(
@@ -49,18 +40,18 @@ class MediaTypeGuessTest {
     @Test
     fun unclassifiedScanPrefersPlainNovelOverAlphabeticalFirst() {
         // The regression: must not be "Anthology" just because it sorts first.
-        assertEquals("m", guess(null, catalogue))
+        assertEquals("m", guessMediaTypeId(null, catalogue))
     }
 
     @Test
     fun categoriesDriveThePick() {
-        assertEquals("i", guess(listOf("Manga"), catalogue))
+        assertEquals("i", guessMediaTypeId(listOf("Manga"), catalogue))
         // "comics & graphic novels".contains("graphic novel") is true, and
         // "Graphic Novel" sorts before "Comic Book" in the catalog, so that is
         // the match — the substring rule means the longest-fitting name wins by
         // catalog order, not the most specific one. Asserting the real behaviour
         // rather than the desirable one keeps this test honest.
-        assertEquals("f", guess(listOf("Comics & Graphic Novels"), catalogue))
+        assertEquals("f", guessMediaTypeId(listOf("Comics & Graphic Novels"), catalogue))
     }
 
     @Test
@@ -68,25 +59,31 @@ class MediaTypeGuessTest {
         // With no plain "Novel", "Graphic Novel" should win over "Light Novel"
         // only by catalog order, and never beat an exact match when one exists.
         val noPlainNovel = catalogue.filter { it.displayName != "Novel" }
-        assertEquals("f", guess(null, noPlainNovel))
-        assertEquals("t", guess(null, listOf(T("t", "White Paper"))))
+        assertEquals("f", guessMediaTypeId(null, noPlainNovel))
+        assertEquals("t", guessMediaTypeId(null, listOf(T("t", "White Paper"))))
     }
 
     @Test
     fun bookExactMatchBeatsNovel() {
         val withBook = catalogue + T("u", "Book")
-        assertEquals("u", guess(null, withBook))
+        assertEquals("u", guessMediaTypeId(null, withBook))
     }
 
     @Test
     fun emptyCatalogueYieldsNull() {
-        assertNull(guess(listOf("Manga"), emptyList()))
+        assertNull(guessMediaTypeId(listOf("Manga"), emptyList()))
     }
 
     @Test
     fun blankCategoryDoesNotMatchEverything() {
         // An empty category string contains every name, so the blank must be
-        // skipped by the `name.isEmpty()` guard rather than matching "White Paper".
-        assertEquals("m", guess(listOf(""), catalogue))
+        // skipped by the blank filter rather than matching "White Paper".
+        assertEquals("m", guessMediaTypeId(listOf(""), catalogue))
+    }
+
+    @Test
+    fun emptyCategoryListFallsThroughToNovel() {
+        // The Dune probe returns `categories: []`, so this is the live shape.
+        assertEquals("m", guessMediaTypeId(emptyList(), catalogue))
     }
 }
