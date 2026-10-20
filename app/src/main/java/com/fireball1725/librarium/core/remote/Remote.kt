@@ -206,19 +206,42 @@ class LibrariumApi2(private val api: LibrariumApi) {
 
     // ---------------------------------------------------------------- auth
 
-    /** `POST /api/v1/auth/login` — unauthenticated by construction. */
+    /**
+     * `POST /api/v1/auth/login` — unauthenticated by construction.
+     *
+     * Explicit serializers rather than the reified overload: `AuthTokens` is
+     * what turns a successful login into a session, and a reified lookup that
+     * resolves the wrong way fails at runtime as a plain
+     * `SerializationException`, which reads to the user as a connection
+     * problem. Naming both types makes the failure impossible.
+     */
     suspend fun login(identifier: String, password: String): AuthTokens =
-        api.post("/api/v1/auth/login", LoginRequest(identifier, password))
+        api.post(
+            "/api/v1/auth/login",
+            LoginRequest(identifier, password),
+            AuthTokens.serializer(),
+            LoginRequest.serializer(),
+        )
 
     /** Ends the session server-side, then the tokens are useless anyway. */
     suspend fun logout(): Unit = api.postVoid("/api/v1/auth/logout")
 
     /** Refreshes the session. Must be called through the single-flight hook. */
     suspend fun refresh(refreshToken: String): AuthTokens =
-        api.post("/api/v1/auth/refresh", RefreshRequest(refreshToken))
+        api.post(
+            "/api/v1/auth/refresh",
+            RefreshRequest(refreshToken),
+            AuthTokens.serializer(),
+            RefreshRequest.serializer(),
+        )
 
     suspend fun updateProfile(displayName: String, email: String): User =
-        api.put("/api/v1/auth/me", UpdateProfileRequest(displayName, email))
+        api.put(
+            "/api/v1/auth/me",
+            UpdateProfileRequest(displayName, email),
+            User.serializer(),
+            UpdateProfileRequest.serializer(),
+        )
 
     suspend fun changePassword(current: String, new: String) {
         api.putVoid("/api/v1/auth/me/password", ChangePasswordRequest(current, new))
@@ -625,7 +648,12 @@ class LibrariumApi2(private val api: LibrariumApi) {
      * admin in, so discarding the tokens would force an immediate re-login.
      */
     suspend fun createFirstAdmin(body: SetupAdminRequest): AuthTokens =
-        api.post("/api/v1/setup/admin", body)
+        api.post(
+            "/api/v1/setup/admin",
+            body,
+            AuthTokens.serializer(),
+            SetupAdminRequest.serializer(),
+        )
 
     // ---------------------------------------------------------------- books: misc
 

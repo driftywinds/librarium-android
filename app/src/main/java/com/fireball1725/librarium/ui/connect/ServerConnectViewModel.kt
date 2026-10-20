@@ -231,13 +231,29 @@ class ServerConnectViewModel(
     private fun normalizeOrEmpty(raw: String): String = ServerUrl.normalize(raw).orEmpty()
 
     /**
-     * A failed request must not read as a successful one. [ApiException]
-     * already carries a precise reason from the transport layer; the fallback
-     * is for anything else that escapes.
+     * A failed request must not read as a successful one, and it must not hide
+     * what went wrong either.
+     *
+     * The previous form fell back to one catch-all sentence for anything that
+     * was not an [ApiException], which turned a diagnosable serialization or
+     * programming fault into "Something went wrong connecting to that server."
+     * — text that names the wrong subsystem (the server was fine) and gives the
+     * user nothing to act on. Now the exception class is named when there is no
+     * message, so the first failure is reportable.
      */
-    private fun Exception.readableMessage(): String = when (this) {
+    private fun Throwable.readableMessage(): String = when (this) {
         is ApiException -> message ?: "Could not reach that server."
-        else -> message ?: "Something went wrong connecting to that server."
+        is kotlinx.serialization.SerializationException ->
+            "The server answered in a format this app did not understand. " +
+                "Check that the app and the server are the same version."
+        is java.net.UnknownHostException ->
+            "Could not find that server. Check the address and your connection."
+        is java.net.SocketTimeoutException ->
+            "The server took too long to answer."
+        is javax.net.ssl.SSLException ->
+            "Could not make a secure connection to that server."
+        else -> message?.takeIf { it.isNotBlank() }
+            ?: "${this::class.simpleName ?: "Error"} while connecting."
     }
 
     class Factory(private val accounts: AccountManager) : ViewModelProvider.Factory {

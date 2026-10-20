@@ -4,10 +4,13 @@
 package com.fireball1725.librarium.core.net
 
 import com.fireball1725.librarium.BuildConfig
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -253,7 +256,9 @@ class LibrariumApi(
             .build()
 
         val response = try {
-            http.newCall(request).execute()
+            withContext(Dispatchers.IO) {
+                http.newCall(request).execute()
+            }
         } catch (e: IOException) {
             throw ApiException.Network(e)
         }
@@ -285,7 +290,9 @@ class LibrariumApi(
     /** Executes with no status mapping beyond transport errors, for raw byte reads. */
     private suspend fun executeRaw(request: Request) =
         try {
-            http.newCall(request).execute()
+            withContext(Dispatchers.IO) {
+                http.newCall(request).execute()
+            }
         } catch (e: IOException) {
             throw ApiException.Network(e)
         }
@@ -304,7 +311,20 @@ class LibrariumApi(
             // `/api/v1/me/books/facets` nests a second envelope. Unwrapping it
             // here rather than at the call site means the one endpoint with a
             // different envelope does not need a different client.
-            val payload: JsonElement = inner.jsonObject["data"]?.takeIf { inner.isEnvelopedObject() } ?: inner
+            //
+            // The `isEnvelopedObject()` test must come *first*. Writing this as
+            // `inner.jsonObject["data"]?.takeIf { inner.isEnvelopedObject() }`
+            // looks equivalent but is not: Kotlin evaluates the receiver
+            // `inner.jsonObject` before `takeIf` ever runs, and `jsonObject`
+            // throws on a `JsonArray`. Most list endpoints — `/lookup/isbn/{isbn}`
+            // among them — answer `{"data": [ … ]}`, so that ordering made every
+            // list-returning call fail with "JsonArray is not a JsonObject".
+            val payload: JsonElement = if (inner.isEnvelopedObject()) {
+                // Safe: guarded by the type check inside `isEnvelopedObject`.
+                (inner as JsonObject)["data"] ?: inner
+            } else {
+                inner
+            }
 
             LIBRARIUM_JSON.decodeFromJsonElement(serializer, payload)
         } catch (e: ApiException) {

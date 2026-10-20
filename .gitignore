@@ -10,6 +10,7 @@ librarium-ios-main/
 # Scratch dumps produced while reading the server source. They are working
 # notes, not inputs to the build; docs/ holds the curated contract instead.
 .src-cache/
+.librarium-src/
 
 # Gradle
 .gradle/
