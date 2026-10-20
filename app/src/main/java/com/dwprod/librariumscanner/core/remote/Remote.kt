@@ -655,6 +655,29 @@ class LibrariumApi2(private val api: LibrariumApi) {
 
     suspend fun deleteList(id: String) = api.delete("/api/v1/me/lists/$id")
 
+    /**
+     * Makes a hand-filled list — what this app calls a view.
+     *
+     * `kind` is the server's discriminator, not a UI one: `manual` enumerates
+     * its books, `smart` computes them from a stored filter. The scan/browse
+     * UI only ever creates manual ones, because a smart list refuses
+     * [addBookToList] outright ("that list fills itself from its filter",
+     * `internal/api/handlers/lists.go`).
+     *
+     * `surface` is books on purpose: the server rejects a manual list on any
+     * other surface, because `list_books` is the only membership table
+     * (`internal/repository/lists.go`).
+     */
+    suspend fun createList(name: String): SavedList =
+        api.post("/api/v1/me/lists", CreateListRequest(name))
+
+    /** Files one book on a manual list. 204 on success. */
+    suspend fun addBookToList(listId: String, bookId: String) =
+        api.postVoid("/api/v1/me/lists/$listId/books/$bookId")
+
+    suspend fun removeBookFromList(listId: String, bookId: String) =
+        api.delete("/api/v1/me/lists/$listId/books/$bookId")
+
     /** The one `/me/counts` response — a bare map of label to number. */
     suspend fun counts(): Map<String, Int> =
         api.get("/api/v1/me/counts", MapSerializer(String.serializer(), Int.serializer()))
@@ -787,6 +810,23 @@ data class CreateAdminUserRequest(val username: String, val email: String, val p
 
 @kotlinx.serialization.Serializable
 data class CreateContributorRequest(val name: String)
+
+/**
+ * The create body for a view.
+ *
+ * Only the keys the server reads and the values this app means are sent;
+ * `kind`/`surface`/`visibility` are defaults rather than options because the
+ * sheet only makes private manual book lists. The server validates each of
+ * them (`internal/repository/lists.go:Create`) and answers 400 with a sentence
+ * worth showing if they disagree.
+ */
+@kotlinx.serialization.Serializable
+data class CreateListRequest(
+    val name: String,
+    val kind: String = "manual",
+    val surface: String = "books",
+    val visibility: String = "private",
+)
 
 /**
  * `GET /api/v1/setup/status`.

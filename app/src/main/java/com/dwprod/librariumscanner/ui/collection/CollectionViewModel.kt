@@ -13,11 +13,13 @@ import com.dwprod.librariumscanner.core.model.Book
 import com.dwprod.librariumscanner.core.model.BookFacets
 import com.dwprod.librariumscanner.core.model.FacetValue
 import com.dwprod.librariumscanner.core.model.Library
+import com.dwprod.librariumscanner.core.model.SavedList
 import com.dwprod.librariumscanner.core.model.Series
 import com.dwprod.librariumscanner.core.model.SeriesIndexPage
 import com.dwprod.librariumscanner.core.net.ApiException
 import com.dwprod.librariumscanner.core.remote.BookSortField
 import com.dwprod.librariumscanner.core.remote.BrowseQuery
+import com.dwprod.librariumscanner.core.remote.LibrariumApi2
 import com.dwprod.librariumscanner.core.remote.SeriesSortField
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -69,6 +71,26 @@ data class AuthorsState(
 )
 
 /**
+ * The views a multi-book selection can be filed into, and the write in flight.
+ *
+ * A "view" in this app is the server's manual list: a set of books enumerated
+ * by hand (`internal/models/user_book.go:List` — `kind` is `manual` or
+ * `smart`, and only a manual list accepts books added by hand). Smart lists
+ * are filtered out on read because picking one in the sheet would be picking a
+ * control the server refuses (`internal/api/handlers/lists.go:AddBookToList`).
+ */
+data class ViewsState(
+    val lists: List<SavedList> = emptyList(),
+    val loading: Boolean = false,
+    val loaded: Boolean = false,
+    val error: String? = null,
+    /** True while books are being written to a view. */
+    val saving: Boolean = false,
+    /** One-shot sentence after a write lands; the pane clears it on a timer. */
+    val message: String? = null,
+)
+
+/**
  * The person-scoped collection, driven by the active account's server.
  *
  * Port of `BrowseViewModel` (`BrowseViewModel.swift`) trimmed to remote mode.
@@ -109,6 +131,178 @@ class CollectionViewModel(
     private val _surface = MutableStateFlow(CollectionSurface.BOOKS)
     val surface: StateFlow<CollectionSurface> = _surface.asStateFlow()
 
+    // ------------------------------------------------- options & views
+
+    /**
+     * Books picked by long-press, waiting to be filed into a view.
+     *
+     * A non-empty set *is* selection mode: there is nothing else to track, and
+     * a separate flag could disagree with the set after a rotation.
+     */
+    private val _selection = MutableStateFlow<Set<String>>(emptySet())
+    val selection: StateFlow<Set<String>> = _selection.asStateFlow()
+
+    private val _views = MutableStateFlow(ViewsState())
+    val views: StateFlow<ViewsState> = _views.asStateFlow()
+
+    private val _viewsSheetOpen = MutableStateFlow(false)
+    val viewsSheetOpen: StateFlow<Boolean> = _viewsSheetOpen.asStateFlow()
+
+    fun toggleSelection(bookId: String) {
+        val current = _selection.value
+        _selection.value = if (bookId in current) current - bookId else current + bookId
+    }
+
+    fun clearSelection() {
+        _selection.value = emptySet()
+    }
+
+    fun openViewsSheet() {
+        if (_selection.value.isEmpty()) return
+        _viewsSheetOpen.value = true
+        _views.value = _views.value.copy(error = null, message = null)
+        // Always re-read on open: a book added from the web since the last time
+        // this sheet was up would otherwise show a count one short.
+        loadViews(force = true)
+    }
+
+    fun closeViewsSheet() {
+        _viewsSheetOpen.value = false
+        _views.value = _views.value.copy(error = null)
+    }
+
+    fun clearViewsMessage() {
+        _views.value = _views.value.copy(message = null)
+    }
+
+    /**
+     * Loads the manual lists once per visit, refreshing counts.
+     *
+     * Seeding happens server-side on this read (`ListRepo.SeedBuiltIns`), so
+     * the first call also creates the lists the product ships — which is why
+     * this must not be skipped when the sheet is opened for the first time.
+     */
+    fun loadViews(force: Boolean = false) {
+        val state = _views.value
+        if (state.loading || (state.loaded && !force)) return
+        viewModelScope.launch {
+            val client = container.activeClient()
+                ?: run {
+                    _views.value = _views.value.copy(error = "Not signed in.")
+                    return@launch
+                }
+            _views.value = _views.value.copy(loading = true, error = null)
+            try {
+                // Smart lists compute their membership from a stored filter and
+                // refuse books added by hand, so they are not destinations for
+                // a selection.
+                val manual = client.lists().filter { !it.isSmart }.sortedBy { it.name }
+                _views.value = _views.value.copy(
+                    lists = manual,
+                    loading = false,
+                    loaded = true,
+                    error = null,
+                )
+            } catch (e: Exception) {
+                _views.value = _views.value.copy(
+                    loading = false,
+                    loaded = true,
+                    error = (e as? ApiException)?.display ?: e.message,
+                )
+            }
+        }
+    }
+
+    /** Files every selected book into an existing view. */
+    fun addSelectionToView(listId: String) {
+        val state = _views.value
+        if (state.saving) return
+        val list = state.lists.firstOrNull { it.id == listId } ?: return
+        viewModelScope.launch {
+            val client = container.activeClient()
+                ?: run {
+                    _views.value = _views.value.copy(error = "Not signed in.")
+                    return@launch
+                }
+            _views.value = _views.value.copy(saving = true, error = null)
+            writeSelection(client, list)
+        }
+    }
+
+    /** Creates a view named by the reader, then files the selection into it. */
+    fun createViewAndAdd(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty() || _views.value.saving) return
+        viewModelScope.launch {
+            val client = container.activeClient()
+                ?: run {
+                    _views.value = _views.value.copy(error = "Not signed in.")
+                    return@launch
+                }
+            _views.value = _views.value.copy(saving = true, error = null)
+            val list = try {
+                client.createList(trimmed)
+            } catch (e: Exception) {
+                _views.value = _views.value.copy(
+                    saving = false,
+                    error = (e as? ApiException)?.display ?: e.message,
+                )
+                return@launch
+            }
+            writeSelection(client, list)
+        }
+    }
+
+    /**
+     * Writes the selection one book at a time.
+     *
+     * One-at-a-time rather than a burst: the endpoint takes one book, and a
+     * first refusal (a smart list, a book the list's library cannot see) is the
+     * same sentence for every later book, so the loop stops and reports it
+     * instead of hammering the server with the rest.
+     */
+    private suspend fun writeSelection(client: LibrariumApi2, list: SavedList) {
+        val ids = selectedBookIdsInOrder()
+        var added = 0
+        var failure: String? = null
+        for (id in ids) {
+            try {
+                client.addBookToList(list.id, id)
+                added++
+            } catch (e: Exception) {
+                failure = (e as? ApiException)?.display ?: e.message
+                break
+            }
+        }
+        if (failure != null) {
+            _views.value = _views.value.copy(saving = false, error = failure)
+            return
+        }
+        _selection.value = emptySet()
+        _viewsSheetOpen.value = false
+        _views.value = _views.value.copy(
+            saving = false,
+            error = null,
+            // Counted locally so the sheet's next open is honest even if the
+            // refresh below fails.
+            lists = _views.value.lists.map {
+                if (it.id == list.id) it.copy(bookCount = it.bookCount + added) else it
+            },
+            message = "Added $added ${if (added == 1) "book" else "books"} to ${list.name}",
+        )
+        loadViews(force = true)
+    }
+
+    /**
+     * The selection in the order the grid shows it, with anything picked under
+     * an older filter still included.
+     */
+    private fun selectedBookIdsInOrder(): List<String> {
+        val ids = _selection.value
+        val visible = _books.value.books.map { it.id }.filter { it in ids }
+        return visible + (ids - visible.toSet())
+    }
+
     fun setSurface(surface: CollectionSurface) {
         _surface.value = surface
     }
@@ -140,6 +334,9 @@ class CollectionViewModel(
         val lib = libraryId ?: _libraries.value.firstOrNull()?.id
         if (lib == _selectedLibraryId.value) return
         _selectedLibraryId.value = lib
+        // A pick made under the old scope would file books the reader can no
+        // longer see on screen.
+        clearSelection()
         // The facet call carries lib=<the single library> so counts reflect
         // that library's collection, matching the per-library scope label.
         loadBooks(reset = true)
@@ -170,6 +367,7 @@ class CollectionViewModel(
         _books.value = _books.value.copy(
             query = _books.value.query.copy(query = text),
         )
+        clearSelection()
         loadBooks(reset = true)
     }
 
@@ -187,11 +385,13 @@ class CollectionViewModel(
         _books.value = _books.value.copy(
             query = current.copy(facets = current.facets + (param to updated)),
         )
+        clearSelection()
         loadBooks(reset = true)
     }
 
     fun clearFilters() {
         _books.value = _books.value.copy(query = BrowseQuery())
+        clearSelection()
         loadBooks(reset = true)
     }
 

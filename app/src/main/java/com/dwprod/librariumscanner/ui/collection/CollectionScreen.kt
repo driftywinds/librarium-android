@@ -6,6 +6,8 @@ package com.dwprod.librariumscanner.ui.collection
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,10 +17,13 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -28,6 +33,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -44,17 +50,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.dwprod.librariumscanner.R
 import com.dwprod.librariumscanner.core.model.Author
 import com.dwprod.librariumscanner.core.model.Book
 import com.dwprod.librariumscanner.core.model.BookFacets
 import com.dwprod.librariumscanner.core.model.FacetValue
+import com.dwprod.librariumscanner.core.model.SavedList
 import com.dwprod.librariumscanner.core.model.Series
 import com.dwprod.librariumscanner.core.remote.BookSortField
 import com.dwprod.librariumscanner.core.remote.BrowseFacet
@@ -85,9 +96,27 @@ fun CollectionScreen(
     val libraries by viewModel.libraries.collectAsStateWithLifecycle()
     val reloadTick by viewModel.reloadTick.collectAsStateWithLifecycle()
     val surface by viewModel.surface.collectAsStateWithLifecycle()
+    val selection by viewModel.selection.collectAsStateWithLifecycle()
+    val views by viewModel.views.collectAsStateWithLifecycle()
+    val viewsSheetOpen by viewModel.viewsSheetOpen.collectAsStateWithLifecycle()
 
     val pagerState = rememberPagerState(pageCount = { CollectionSurface.entries.size })
     var drawerOpen by remember { mutableStateOf(false) }
+    // The facet picker is a full-screen panel, so it is composed by the shell
+    // rather than inside the pane. As a Column sibling *after* a
+    // `fillMaxSize()` grid it used to be measured to zero height, which made
+    // the filter button look dead.
+    var showFilters by remember { mutableStateOf(false) }
+
+    // Back closes whatever this screen opened before it leaves the screen.
+    BackHandler(enabled = drawerOpen || showFilters || viewsSheetOpen || selection.isNotEmpty()) {
+        when {
+            viewsSheetOpen -> viewModel.closeViewsSheet()
+            showFilters -> showFilters = false
+            drawerOpen -> drawerOpen = false
+            else -> viewModel.clearSelection()
+        }
+    }
 
     LaunchedEffect(reloadTick, libraries) {
         if (libraries.isNotEmpty()) {
@@ -145,8 +174,11 @@ fun CollectionScreen(
                 when (CollectionSurface.entries[page]) {
                     CollectionSurface.BOOKS -> BooksPane(
                         state = books,
+                        selection = selection,
+                        viewsMessage = views.message,
                         viewModel = viewModel,
                         onOpenBook = onOpenBook,
+                        onOpenFilters = { showFilters = true },
                     )
                     CollectionSurface.SERIES -> SeriesPane(
                         state = series,
@@ -186,6 +218,28 @@ fun CollectionScreen(
                 onClose = { drawerOpen = false },
             )
         }
+
+        if (showFilters) {
+            FilterSheet(
+                state = books,
+                onToggle = viewModel::toggleFacet,
+                onClear = {
+                    viewModel.clearFilters()
+                    showFilters = false
+                },
+                onClose = { showFilters = false },
+            )
+        }
+
+        if (viewsSheetOpen && selection.isNotEmpty()) {
+            AddToViewSheet(
+                count = selection.size,
+                state = views,
+                onCreate = viewModel::createViewAndAdd,
+                onPick = viewModel::addSelectionToView,
+                onClose = viewModel::closeViewsSheet,
+            )
+        }
     }
 }
 
@@ -194,13 +248,16 @@ fun CollectionScreen(
 @Composable
 private fun BooksPane(
     state: BooksState,
+    selection: Set<String>,
+    viewsMessage: String?,
     viewModel: CollectionViewModel,
     onOpenBook: (Book) -> Unit,
+    onOpenFilters: () -> Unit,
 ) {
     val theme = LocalLibrariumTheme.current
     val colors = theme.colors
     val gridState = rememberLazyGridState()
-    var showFilters by remember { mutableStateOf(false) }
+    val selectionMode = selection.isNotEmpty()
 
     // Pre-fetch the next page when the tail comes on screen (iOS does this
     // from `loadMore`, triggered the same way).
@@ -240,7 +297,7 @@ private fun BooksPane(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
-            FilterButton(badge = state.query.activeFilterCount(), onOpen = { showFilters = true })
+            FilterButton(badge = state.query.activeFilterCount(), onOpen = onOpenFilters)
         }
 
         Row(
@@ -261,6 +318,23 @@ private fun BooksPane(
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
             )
+        }
+
+        // ---- selection mode --------------------------------------------
+        if (selectionMode) {
+            SelectionBar(
+                count = selection.size,
+                onAddToView = viewModel::openViewsSheet,
+                onCancel = viewModel::clearSelection,
+            )
+        }
+        if (viewsMessage != null) {
+            // A view was written into; say so, then get out of the way.
+            LaunchedEffect(viewsMessage) {
+                kotlinx.coroutines.delay(3500)
+                viewModel.clearViewsMessage()
+            }
+            MessagePill(viewsMessage)
         }
 
         if (state.error != null && state.books.isEmpty()) {
@@ -292,20 +366,16 @@ private fun BooksPane(
             modifier = Modifier.fillMaxSize(),
         ) {
             itemsIndexed(state.books, key = { _, b -> b.id }) { _, book ->
-                BookCell(book, onClick = { onOpenBook(book) })
+                BookCell(
+                    book = book,
+                    selected = book.id in selection,
+                    selectionMode = selectionMode,
+                    onClick = {
+                        if (selectionMode) viewModel.toggleSelection(book.id) else onOpenBook(book)
+                    },
+                    onLongClick = { viewModel.toggleSelection(book.id) },
+                )
             }
-        }
-
-        if (showFilters) {
-            FilterSheet(
-                state = state,
-                onToggle = viewModel::toggleFacet,
-                onClear = {
-                    viewModel.clearFilters()
-                    showFilters = false
-                },
-                onClose = { showFilters = false },
-            )
         }
     }
 }
@@ -375,10 +445,11 @@ private fun CollectionDrawer(
                         .padding(horizontal = 18.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        row.icon,
-                        color = if (active) colors.accent else colors.appText2,
-                        fontSize = 18.sp,
+                    Icon(
+                        painter = painterResource(row.iconRes),
+                        contentDescription = null,
+                        tint = if (active) colors.accent else colors.appText2,
+                        modifier = Modifier.size(20.dp),
                     )
                     Spacer(Modifier.width(14.dp))
                     Text(
@@ -397,7 +468,12 @@ private fun CollectionDrawer(
                     .padding(horizontal = 18.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("⌖", color = colors.accentStrong, fontSize = 18.sp)
+                Icon(
+                    painter = painterResource(R.drawable.ic_scan),
+                    contentDescription = null,
+                    tint = colors.accentStrong,
+                    modifier = Modifier.size(20.dp),
+                )
                 Spacer(Modifier.width(14.dp))
                 Text("Scan a book", color = colors.accentStrong, fontSize = 15.sp)
             }
@@ -414,15 +490,16 @@ private fun CollectionDrawer(
 
 /** One destination row of the drawer. */
 private data class DrawerRow(
-    val icon: String,
+    /** Vector drawable converted from the SVG in `assets/`. */
+    val iconRes: Int,
     val label: String,
     val surface: CollectionSurface,
 )
 
 private val drawerRows = listOf(
-    DrawerRow("▤", "Books", CollectionSurface.BOOKS),
-    DrawerRow("▦", "Series", CollectionSurface.SERIES),
-    DrawerRow("✎", "Authors", CollectionSurface.AUTHORS),
+    DrawerRow(R.drawable.ic_books, "Books", CollectionSurface.BOOKS),
+    DrawerRow(R.drawable.ic_series, "Series", CollectionSurface.SERIES),
+    DrawerRow(R.drawable.ic_authors, "Authors", CollectionSurface.AUTHORS),
 )
 
 /** Round icon button used by the shell header, filter button and scan FAB. */
@@ -452,18 +529,44 @@ private fun CircleButton(
 }
 
 /** One grid cell: cover with title below, like `BookRow`'s grid face. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun BookCell(book: Book, onClick: () -> Unit) {
+private fun BookCell(
+    book: Book,
+    selected: Boolean,
+    selectionMode: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
     val colors = LocalLibrariumTheme.current.colors
+    val haptics = LocalHapticFeedback.current
     Column(
-        modifier = Modifier.clickable { onClick() },
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = {
+                    // The press that starts a selection has to feel different
+                    // from the tap that opens a book, or the sheet arriving is
+                    // the only clue anything happened.
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
+                },
+            ),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
                 .clip(RoundedCornerShape(8.dp))
-                .background(colors.appCard),
+                .background(colors.appCard)
+                .then(
+                    if (selected) {
+                        Modifier.border(2.dp, colors.accent, RoundedCornerShape(8.dp))
+                    } else {
+                        Modifier
+                    }
+                ),
         ) {
             if (!book.coverUrl.isNullOrEmpty()) {
                 AsyncImage(
@@ -480,6 +583,24 @@ private fun BookCell(book: Book, onClick: () -> Unit) {
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Light,
                     )
+                }
+            }
+            if (selectionMode) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(if (selected) colors.accent else Color.Black.copy(alpha = 0.45f))
+                        .border(
+                            0.5.dp,
+                            if (selected) colors.accent else Color.White.copy(alpha = 0.7f),
+                            CircleShape,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (selected) Text("✓", color = Color.White, fontSize = 11.sp)
                 }
             }
             if (book.userReadStatus == "read") {
@@ -513,6 +634,243 @@ private fun BookCell(book: Book, onClick: () -> Unit) {
     }
 }
 
+/**
+ * The bar that appears once a book is long-pressed: how many are picked, the
+ * one action that matters, and the way out.
+ */
+@Composable
+private fun SelectionBar(count: Int, onAddToView: () -> Unit, onCancel: () -> Unit) {
+    val colors = LocalLibrariumTheme.current.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 4.dp)
+            .background(colors.appCard, RoundedCornerShape(12.dp))
+            .border(0.5.dp, colors.appLine, RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$count selected",
+            color = colors.appText,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            "Add to view",
+            color = colors.accentStrong,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onAddToView() }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        )
+        Text(
+            "Cancel",
+            color = colors.appText3,
+            fontSize = 14.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onCancel() }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        )
+    }
+}
+
+/** The transient "Added 3 books to Favourites" line. */
+@Composable
+private fun MessagePill(text: String) {
+    val colors = LocalLibrariumTheme.current.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 4.dp)
+            .background(colors.good.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("✓", color = colors.good, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(8.dp))
+        Text(text, color = colors.good, fontSize = 12.sp)
+    }
+}
+
+// ---------------------------------------------------------------------- views
+
+/**
+ * Files the books picked by long-press into a view.
+ *
+ * Two doors, because a reader either knows where the books go or is making the
+ * place for them now: name a new view (create, then add), or pick one already
+ * there. Both land on the same two server calls — `POST /me/lists` and
+ * `POST /me/lists/{id}/books/{book_id}` — and neither is available for a smart
+ * view, which is why only manual lists are offered.
+ */
+@Composable
+private fun AddToViewSheet(
+    count: Int,
+    state: ViewsState,
+    onCreate: (String) -> Unit,
+    onPick: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    val colors = LocalLibrariumTheme.current.colors
+    var name by remember { mutableStateOf("") }
+    val canCreate = name.isNotBlank() && !state.saving
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.55f))
+            .clickable { onClose() },
+    ) {
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .imePadding()
+                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .background(colors.appCard)
+                // Swallow taps so the scrim behind the panel is not the target.
+                .clickable(enabled = false) { }
+                .padding(18.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Add to a view",
+                        color = colors.appText,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "$count selected",
+                        color = colors.appText3,
+                        fontSize = 12.sp,
+                    )
+                }
+                Text(
+                    "✕",
+                    color = colors.appText3,
+                    fontSize = 15.sp,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { onClose() }
+                        .padding(8.dp),
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    placeholder = {
+                        Text("Name a new view…", color = colors.appText3, fontSize = 14.sp)
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.accent.copy(alpha = 0.5f),
+                        unfocusedBorderColor = colors.appLine,
+                        focusedTextColor = colors.appText,
+                        unfocusedTextColor = colors.appText,
+                        cursorColor = colors.accent,
+                    ),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (state.saving) "Saving…" else "Create",
+                    color = if (canCreate) colors.accentStrong else colors.appText3,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(enabled = canCreate) { onCreate(name) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            }
+
+            if (state.error != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(state.error, color = colors.bad, fontSize = 12.sp)
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "EXISTING VIEWS",
+                color = colors.appText3,
+                fontSize = 11.sp,
+                letterSpacing = 1.2.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            when {
+                state.loading && state.lists.isEmpty() ->
+                    Text("Loading…", color = colors.appText3, fontSize = 14.sp)
+                state.loaded && state.lists.isEmpty() ->
+                    Text(
+                        "No views yet — name one above.",
+                        color = colors.appText3,
+                        fontSize = 13.sp,
+                    )
+                else -> LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                    items(state.lists, key = { it.id }) { view ->
+                        ViewRow(view, enabled = !state.saving, onPick = onPick)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+/** One destination row: the view's name, its size, and the tap target. */
+@Composable
+private fun ViewRow(view: SavedList, enabled: Boolean, onPick: (String) -> Unit) {
+    val colors = LocalLibrariumTheme.current.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled) { onPick(view.id) }
+            .padding(horizontal = 4.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(colors.accentSoft),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                view.name.take(1).uppercase(),
+                color = colors.accentStrong,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                view.name,
+                color = colors.appText,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                "${view.bookCount} ${if (view.bookCount == 1) "book" else "books"}",
+                color = colors.appText3,
+                fontSize = 11.sp,
+            )
+        }
+        Text("›", color = colors.appText3, fontSize = 16.sp)
+    }
+}
+
 private val theme_type_cardTitle = 13.sp
 
 /**
@@ -531,7 +889,12 @@ private fun FilterButton(badge: Int, onOpen: () -> Unit) {
             .clickable { onOpen() },
         contentAlignment = Alignment.Center,
     ) {
-        Text("⧢", color = colors.appText2, fontSize = 18.sp)
+        Icon(
+            painter = painterResource(R.drawable.ic_filter),
+            contentDescription = "Filters",
+            tint = colors.appText2,
+            modifier = Modifier.size(20.dp),
+        )
         if (badge > 0) {
             Box(
                 modifier = Modifier
