@@ -62,6 +62,15 @@ fun BookDetailScreen(
     val book = state.book
     var confirmDelete by remember { mutableStateOf(false) }
 
+    // The edit sheet writes through its own routes (fields, cover, edition,
+    // series) and the detail screen is not recomposed by that — it is still on
+    // the back stack underneath. Re-reading when it comes back to the front is
+    // what makes the change visible instead of leaving the old cover and the old
+    // edition on screen.
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        viewModel.load()
+    }
+
     if (state.deleted) {
         onDeleted()
         return

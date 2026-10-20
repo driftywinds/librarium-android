@@ -68,10 +68,14 @@ fun BookEditScreen(
         state.saved?.let { onSaved(it) }
     }
 
+    var showCoverCapture by remember { mutableStateOf(false) }
+
+    androidx.compose.foundation.layout.Box(
+        Modifier.fillMaxSize().background(colors.appBackground),
+    ) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(colors.appBackground)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 22.dp),
     ) {
@@ -148,6 +152,79 @@ fun BookEditScreen(
             hint = "What it is about",
             minLines = 5,
         )
+
+        FieldLabel("Cover")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                when {
+                    state.coverBusy -> "Working…"
+                    state.hasCover -> "A cover is stored on the server."
+                    else -> "No cover stored."
+                },
+                color = colors.appText2,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (!state.coverBusy) {
+                ActionText("Photograph") { showCoverCapture = true }
+                if (state.hasCover) ActionText("Remove") { viewModel.clearCover() }
+                ActionText("Refresh") { viewModel.refreshMetadata() }
+            }
+        }
+
+        FieldLabel("Series")
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            SelectableChip(
+                label = "None",
+                selected = state.selectedSeriesId == null,
+                onClick = { viewModel.setSelectedSeries(null) },
+            )
+            state.seriesOptions.forEach { series ->
+                SelectableChip(
+                    label = series.name.ifBlank { "Series" },
+                    selected = state.selectedSeriesId == series.id,
+                    onClick = { viewModel.setSelectedSeries(series.id) },
+                )
+            }
+        }
+        if (state.seriesOptions.isEmpty()) {
+            Text(
+                "No series in this library yet.",
+                color = colors.appText3,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        if (state.selectedSeriesId != null) {
+            Spacer(Modifier.height(8.dp))
+            Field(
+                value = state.seriesPosition,
+                on = viewModel::setSeriesPosition,
+                hint = "Volume number in the series (e.g. 3)",
+            )
+        }
+
+        if (state.edition != null) {
+            FieldLabel("Edition")
+            Field(value = state.isbn13, on = viewModel::setIsbn13, hint = "ISBN-13")
+            Spacer(Modifier.height(8.dp))
+            Field(value = state.isbn10, on = viewModel::setIsbn10, hint = "ISBN-10")
+            Spacer(Modifier.height(8.dp))
+            Field(value = state.publisher, on = viewModel::setPublisher, hint = "Publisher")
+            Spacer(Modifier.height(8.dp))
+            Field(value = state.language, on = viewModel::setLanguage, hint = "Language (e.g. en)")
+            Spacer(Modifier.height(8.dp))
+            Field(
+                value = state.publishDate,
+                on = viewModel::setPublishDate,
+                hint = "Publish date (YYYY-MM-DD)",
+            )
+            Spacer(Modifier.height(8.dp))
+            Field(value = state.pageCount, on = viewModel::setPageCount, hint = "Pages")
+        }
 
         FieldLabel("Authors")
         if (state.contributors.isEmpty()) {
@@ -274,6 +351,32 @@ fun BookEditScreen(
 
         Spacer(Modifier.height(40.dp))
     }
+        if (showCoverCapture) {
+            CoverCaptureOverlay(
+                onCaptured = { jpeg ->
+                    showCoverCapture = false
+                    viewModel.uploadCover(jpeg)
+                },
+                onCancel = { showCoverCapture = false },
+            )
+        }
+    }
+}
+
+/** A plain-text button, the form's action affordance. */
+@Composable
+private fun ActionText(label: String, onClick: () -> Unit) {
+    val colors = LocalLibrariumTheme.current.colors
+    Text(
+        label,
+        color = colors.accentStrong,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    )
 }
 
 @Composable

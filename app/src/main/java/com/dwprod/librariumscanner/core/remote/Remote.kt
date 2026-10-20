@@ -212,6 +212,10 @@ data class CreateSeriesRequest(
 @kotlinx.serialization.Serializable
 data class FetchCoverRequest(val url: String)
 
+/** Body of `POST /libraries/{id}/series/{series}/books`. */
+@kotlinx.serialization.Serializable
+data class SeriesBookRequest(val bookId: String, val position: Double = 0.0)
+
 @kotlinx.serialization.Serializable
 data class AdminUserPatch(val isActive: Boolean)
 
@@ -410,6 +414,23 @@ class LibrariumApi2(private val api: LibrariumApi) {
     suspend fun deleteCover(libraryId: String, bookId: String) =
         api.delete("/api/v1/libraries/$libraryId/books/$bookId/cover")
 
+    /**
+     * Uploads a photographed cover.
+     *
+     * `PUT .../cover` is multipart with a single `cover` part — the field name
+     * is the handler's, not a guess (`BookService.swift:92-100` sends the same
+     * one, and `internal/api/handlers/books.go` reads `FormFile("cover")`).
+     */
+    suspend fun uploadCover(libraryId: String, bookId: String, jpeg: ByteArray) =
+        api.uploadMultipart(
+            path = "/api/v1/libraries/$libraryId/books/$bookId/cover",
+            method = "PUT",
+            fieldName = "cover",
+            fileData = jpeg,
+            fileName = "cover.jpg",
+            mimeType = "image/jpeg",
+        )
+
     // ---- editions
 
     /** `{"items": [...]}`. */
@@ -477,6 +498,23 @@ class LibrariumApi2(private val api: LibrariumApi) {
 
     suspend fun bookSeries(libraryId: String, bookId: String): List<BookSeriesRef> =
         api.get("/api/v1/libraries/$libraryId/books/$bookId/series", ListSerializer(BookSeriesRef.serializer()))
+
+    /**
+     * Puts a book on a series, or moves it along that series.
+     *
+     * One route for both: the handler upserts on `(series_id, book_id)`
+     * (`SeriesService.addBook`, `internal/api/handlers/series.go`), so sending
+     * a position is the whole write.
+     */
+    suspend fun addBookToSeries(libraryId: String, seriesId: String, bookId: String, position: Double) {
+        api.postVoid(
+            "/api/v1/libraries/$libraryId/series/$seriesId/books",
+            SeriesBookRequest(bookId = bookId, position = position),
+        )
+    }
+
+    suspend fun removeBookFromSeries(libraryId: String, seriesId: String, bookId: String) =
+        api.delete("/api/v1/libraries/$libraryId/series/$seriesId/books/$bookId")
 
     // ---- copies
 
