@@ -93,7 +93,10 @@ jobs:
         run: |
           apk="app/build/outputs/apk/release/app-release.apk"
           test -f "$apk" || { echo "::error::no release APK was produced"; exit 1; }
-          apksigner verify --print-certs "$apk" | head -5
+          # build-tools is not guaranteed to be on PATH; pick the newest copy.
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          test -n "$apksigner" || { echo "::error::apksigner not found under \$ANDROID_HOME"; exit 1; }
+          "$apksigner" verify --print-certs "$apk" | head -5
 
       - name: Name the artifact
         id: artifact
