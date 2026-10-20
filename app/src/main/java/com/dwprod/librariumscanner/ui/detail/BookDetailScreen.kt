@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.dwprod.librariumscanner.R
 import com.dwprod.librariumscanner.core.model.Book
 import com.dwprod.librariumscanner.ui.theme.LocalLibrariumTheme
 
@@ -76,13 +77,13 @@ fun BookDetailScreen(
         ) {
             CircleButton("‹") { onBack() }
             Row {
-                CircleButton("✎") {
+                IconCircleButton(R.drawable.ic_book_edit, "Edit book") {
                     if (book != null && state.libraryId.isNotEmpty()) {
                         onEdit(book, state.libraryId)
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                CircleButton("🗑") { confirmDelete = true }
+                IconCircleButton(R.drawable.ic_book_delete, "Delete book") { confirmDelete = true }
             }
         }
 
@@ -320,6 +321,32 @@ private fun CircleButton(glyph: String, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(glyph, color = colors.appText2, fontSize = 18.sp)
+    }
+}
+
+/**
+ * A round button carrying one of the supplied vector icons.
+ *
+ * The tint is the same `appText2` the glyph buttons use, so the header keeps a
+ * single weight whether a control is a symbol or an SVG.
+ */
+@Composable
+private fun IconCircleButton(iconRes: Int, contentDescription: String, onClick: () -> Unit) {
+    val colors = LocalLibrariumTheme.current.colors
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(colors.appCard)
+            .activate(onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.material3.Icon(
+            painter = androidx.compose.ui.res.painterResource(iconRes),
+            contentDescription = contentDescription,
+            tint = colors.appText2,
+            modifier = Modifier.size(19.dp),
+        )
     }
 }
 

@@ -86,6 +86,7 @@ fun CollectionScreen(
     onOpenBook: (Book) -> Unit,
     onOpenSeries: (Series) -> Unit,
     onOpenAuthor: (Author) -> Unit,
+    onOpenList: (SavedList) -> Unit,
 ) {
     val theme = LocalLibrariumTheme.current
     val colors = theme.colors
@@ -123,6 +124,9 @@ fun CollectionScreen(
             viewModel.loadBooks(reset = true)
             viewModel.loadSeries()
             viewModel.loadAuthors()
+            // Counts on the Lists face are the whole point of that face, and a
+            // scan or an add changes them without touching this screen.
+            viewModel.loadLists(force = true)
         }
     }
 
@@ -163,6 +167,7 @@ fun CollectionScreen(
                             CollectionSurface.BOOKS -> countTitle(books)
                             CollectionSurface.SERIES -> "${series.total} series"
                             CollectionSurface.AUTHORS -> "${authors.total} authors"
+                            CollectionSurface.LISTS -> listsTitle(lists)
                         },
                         color = colors.appText3,
                         fontSize = 11.sp,
@@ -189,6 +194,10 @@ fun CollectionScreen(
                         state = authors,
                         viewModel = viewModel,
                         onOpenAuthor = onOpenAuthor,
+                    )
+                    CollectionSurface.LISTS -> ListsPane(
+                        state = lists,
+                        onOpenList = onOpenList,
                     )
                 }
             }
@@ -383,6 +392,15 @@ private fun BooksPane(
 private fun scopeLabel(state: BooksState): String =
     if (state.query.activeFilterCount() > 0) "${state.query.activeFilterCount()} filter(s) on" else "Collection"
 
+private fun listsTitle(state: ListsState): String {
+    val addable = state.listsAddableTo().size
+    return when {
+        state.loading && !state.loaded -> "Loading…"
+        addable == 0 -> "No lists"
+        else -> "$addable list" + if (addable == 1) "" else "s"
+    }
+}
+
 private fun countTitle(state: BooksState): String =
     when {
         state.loading && !state.loaded -> "Loading…"
@@ -500,6 +518,7 @@ private val drawerRows = listOf(
     DrawerRow(R.drawable.ic_books, "Books", CollectionSurface.BOOKS),
     DrawerRow(R.drawable.ic_series, "Series", CollectionSurface.SERIES),
     DrawerRow(R.drawable.ic_authors, "Authors", CollectionSurface.AUTHORS),
+    DrawerRow(R.drawable.ic_lists, "Lists", CollectionSurface.LISTS),
 )
 
 /** Round icon button used by the shell header, filter button and scan FAB. */
@@ -531,12 +550,12 @@ private fun CircleButton(
 /** One grid cell: cover with title below, like `BookRow`'s grid face. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun BookCell(
+internal fun BookCell(
     book: Book,
-    selected: Boolean,
-    selectionMode: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    selected: Boolean = false,
+    selectionMode: Boolean = false,
+    onLongClick: () -> Unit = {},
 ) {
     val colors = LocalLibrariumTheme.current.colors
     val haptics = LocalHapticFeedback.current
@@ -1324,5 +1343,90 @@ private fun AuthorsPane(
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------- lists
+
+/**
+ * The Lists face: every hand-picked list with its size, and the way into it.
+ *
+ * Smart views are not listed here even though the server calls them lists: their
+ * membership is a filter rather than a set of books, so tapping one would open a
+ * filter query rather than the contents of a list. The add sheet shows them,
+ * read-only, next to the lists that do take picks.
+ */
+@Composable
+private fun ListsPane(
+    state: ListsState,
+    onOpenList: (SavedList) -> Unit,
+) {
+    val colors = LocalLibrariumTheme.current.colors
+    val addable = state.listsAddableTo()
+
+    Column(Modifier.fillMaxSize()) {
+        when {
+            state.error != null && addable.isEmpty() -> EmptyPane(state.error ?: "")
+            !state.loaded && state.loading -> EmptyPane("Loading…")
+            addable.isEmpty() -> EmptyPane(
+                "No lists yet.\nLong-press books in Collection, then Add to list.",
+            )
+            else -> LazyColumn(
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 18.dp, end = 18.dp, top = 4.dp, bottom = 40.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(addable, key = { it.id }) { list ->
+                    ListCard(list, onClick = { onOpenList(list) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ListCard(list: SavedList, onClick: () -> Unit) {
+    val colors = LocalLibrariumTheme.current.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(theme_radius_card))
+            .background(colors.appCard)
+            .clickable { onClick() }
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(colors.accentSoft),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                list.name.take(1).uppercase(),
+                color = colors.accentStrong,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                list.name,
+                color = colors.appText,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "${list.bookCount} ${if (list.bookCount == 1) "book" else "books"}",
+                color = colors.appText3,
+                fontSize = 11.sp,
+            )
+        }
+        Text("›", color = colors.appText3, fontSize = 16.sp)
     }
 }

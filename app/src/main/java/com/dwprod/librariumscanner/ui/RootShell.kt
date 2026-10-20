@@ -126,6 +126,23 @@ private fun ShellNavigate(container: AppContainer) {
                     onOpenAuthor = { author ->
                         nav.navigate("author/${author.id}/${com.dwprod.librariumscanner.core.remote.enc(author.name.ifBlank { "Author" })}")
                     },
+                    onOpenList = { list ->
+                        nav.navigate("list/${list.id}/${com.dwprod.librariumscanner.core.remote.enc(list.name.ifBlank { "List" })}")
+                    },
+                )
+            }
+
+            composable("list/{listId}/{listName}") { entry ->
+                val listId = entry.arguments?.getString("listId") ?: ""
+                val listName = java.net.URLDecoder.decode(
+                    entry.arguments?.getString("listName") ?: "", "UTF-8",
+                )
+                com.dwprod.librariumscanner.ui.collection.ListDetailScreen(
+                    listId = listId,
+                    listName = listName,
+                    container = container,
+                    onOpenBook = { book -> nav.navigate("detail/${book.libraryId}/${book.id}") },
+                    onBack = { nav.popBackStack() },
                 )
             }
 

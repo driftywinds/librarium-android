@@ -33,6 +33,8 @@ enum class CollectionSurface(val label: String) {
     BOOKS("Books"),
     SERIES("Series"),
     AUTHORS("Authors"),
+    /** The hand-picked lists, and the way into each one's books. */
+    LISTS("Lists"),
 }
 
 /**
