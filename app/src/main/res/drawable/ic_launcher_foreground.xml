@@ -1,0 +1,24 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!--
+      Three stacked spines, matching the accent gradient the app uses for the
+      generated book jackets (Theme.accent -> Theme.accentDeep).
+    -->
+    <group android:translateX="0" android:translateY="0">
+        <path
+            android:fillColor="#AAB1FF"
+            android:pathData="M32,38 h7 v32 h-7 z" />
+        <path
+            android:fillColor="#8089FF"
+            android:pathData="M43,34 h7 v36 h-7 z" />
+        <path
+            android:fillColor="#5A64E8"
+            android:pathData="M54,41 h7 v29 h-7 z" />
+        <path
+            android:fillColor="#F1EDE2"
+            android:pathData="M66,36 h4 v34 h-4 z" />
+    </group>
+</vector>

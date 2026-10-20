@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# Librarium Android
+# ---------------------------------------------------------------------------
+
+# The iOS client is a local read-only reference checkout, never part of this
+# repo. It is kept on disk so the Android port can be compared against the
+# shipping implementation, but it must never be committed here.
+librarium-ios-main/
+
+# Scratch dumps produced while reading the server source. They are working
+# notes, not inputs to the build; docs/ holds the curated contract instead.
+.src-cache/
+
+# Gradle
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+release/
+.gradletaskhistory
+
+# Local toolchain installed by the developer / agent (SDK, JDK, download cache).
+.tooling/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.hprof
+captures/
+.externalNativeBuild/
+.cxx/
+navigation/
+
+# Kotlin
+.kotlin/
+
+# Signing — never commit keys or passwords
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# Secrets / environment
+.env
+.env.*
+secrets.properties
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
