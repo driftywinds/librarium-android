@@ -39,6 +39,7 @@ import com.dwprod.librariumscanner.core.net.LIBRARIUM_JSON
 import com.dwprod.librariumscanner.core.net.LibrariumApi
 import com.dwprod.librariumscanner.core.net.Paged
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -107,8 +108,12 @@ data class CreateEditionRequest(
     // isbn_10 / isbn_13 need explicit keys — the snake-case strategy will not
     // insert an underscore before a digit, the same trap as convertToSnakeCase
     // (BookService.swift:255-267 carries an explicit CodingKeys for this).
-    val isbn10: String = "",
-    val isbn13: String = "",
+    // Without these two annotations the create body said "isbn10"/"isbn13",
+    // the server ignored both, and every scanned-in copy was stored without an
+    // ISBN — which is what `bookByIsbn` matches next time, so the same barcode
+    // scanned twice was never recognised as already owned.
+    @SerialName("isbn_10") val isbn10: String = "",
+    @SerialName("isbn_13") val isbn13: String = "",
     val description: String = "",
     val pageCount: Int? = null,
     val copyCount: Int? = null,

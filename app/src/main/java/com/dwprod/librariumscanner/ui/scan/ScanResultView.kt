@@ -68,12 +68,16 @@ fun ScanResultView(
     selectedLibraryKey: String?,
     ownership: Map<String, OwnedMatch?>,
     mediaTypes: List<MediaType>,
+    adding: Boolean,
+    addError: String?,
     onAdd: (readStatus: String?, mediaTypeId: String?) -> Unit,
     onScanAnother: () -> Unit,
     onClose: () -> Unit,
     onManualEntry: () -> Unit,
     onOpenBook: (Library, String) -> Unit,
-) {    var selectedStatus by remember { mutableStateOf(ReadStatus.UNREAD) }
+    onSelectLibrary: (String) -> Unit,
+) {
+    var selectedStatus by remember { mutableStateOf(ReadStatus.UNREAD) }
     // Null means "no explicit pick yet", so the suggestion can still arrive
     // after the catalog loads without clobbering a chip the user has tapped.
     var pickedMediaTypeId by remember(phase.isbn) { mutableStateOf<String?>(null) }
@@ -111,7 +115,10 @@ fun ScanResultView(
             found != null -> {
                 CoverHero(found)
                 OwnershipCard(libraries, ownership, onOpenBook)
-                LibrarySection(libraries, selectedLibraryKey, ownership, onSelectLibrary = { })
+                // Selection is a real callback: the default is the first library,
+                // but with several servers the reader has to be able to move the
+                // target, and this row is the only affordance that does it.
+                LibrarySection(libraries, selectedLibraryKey, ownership, onSelectLibrary)
                 MediaAndStatusRow(
                     mediaTypes = mediaTypes,
                     selectedStatus = selectedStatus,
@@ -119,9 +126,13 @@ fun ScanResultView(
                     onStatusChange = { selectedStatus = it },
                     onMediaTypeChange = { pickedMediaTypeId = it },
                 )
+                if (addError != null) {
+                    AddErrorBanner(addError)
+                }
                 AddCta(
                     label = ctaLabel(libraries, selectedLibraryKey, ownership),
-                    enabled = selectedLibraryKey != null,
+                    enabled = selectedLibraryKey != null && !adding,
+                    adding = adding,
                     onAdd = { onAdd(selectedStatus.apiValue, selectedMediaTypeId) },
                 )
                 Spacer(Modifier.height(30.dp))
@@ -562,8 +573,40 @@ private fun MediaAndStatusRow(
     }
 }
 
+/**
+ * Why the last tap on the CTA did not add anything.
+ *
+ * Sits directly above the CTA so the reason and the retry affordance are one
+ * glance apart. Before this existed every refusal — a 400, a 403 on a library
+ * the user cannot write to, a dead server — rendered as a button that appeared
+ * to do nothing.
+ */
 @Composable
-private fun AddCta(label: String, enabled: Boolean, onAdd: () -> Unit) {
+private fun AddErrorBanner(message: String) {
+    val colors = LocalLibrariumTheme.current.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 22.dp)
+            .padding(bottom = 6.dp)
+            .background(colors.bad.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+            .border(0.5.dp, colors.bad.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text("!", color = colors.bad, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            message,
+            color = colors.appText,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+        )
+    }
+}
+
+@Composable
+private fun AddCta(label: String, enabled: Boolean, adding: Boolean, onAdd: () -> Unit) {
     val colors = LocalLibrariumTheme.current.colors
     androidx.compose.material3.Button(
         onClick = onAdd,
@@ -579,7 +622,19 @@ private fun AddCta(label: String, enabled: Boolean, onAdd: () -> Unit) {
             .padding(horizontal = 22.dp, vertical = 10.dp)
             .height(54.dp),
     ) {
-        Text(label, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        if (adding) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = Color.White,
+            )
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(
+            if (adding) "Adding…" else label,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

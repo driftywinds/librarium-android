@@ -49,6 +49,8 @@ fun ScanFlowRoute(
     val selectedKey by viewModel.selectedLibraryKey.collectAsStateWithLifecycle()
     val ownership by viewModel.ownership.collectAsStateWithLifecycle()
     val mediaTypes by viewModel.mediaTypes.collectAsStateWithLifecycle()
+    val adding by viewModel.adding.collectAsStateWithLifecycle()
+    val addError by viewModel.addError.collectAsStateWithLifecycle()
 
     // The collection must notice what a scan just added: every close out of
     // the flow (result-sheet ✕, cancel button, back gesture) bumps the reload
@@ -91,6 +93,8 @@ fun ScanFlowRoute(
                 selectedLibraryKey = selectedKey,
                 ownership = ownership,
                 mediaTypes = mediaTypes,
+                adding = adding,
+                addError = addError,
                 onAdd = { status, mediaTypeId ->
                     viewModel.addBook(current.isbn, mediaTypeId, status)
                 },
@@ -98,6 +102,7 @@ fun ScanFlowRoute(
                 onClose = finish,
                 onManualEntry = { /* surfaced by the no-match screen */ },
                 onOpenBook = { _, _ -> finish() },
+                onSelectLibrary = viewModel::selectLibrary,
             )
         }
     }

@@ -78,6 +78,18 @@ class ScanViewModel(
     private val _mediaTypes = MutableStateFlow<List<MediaType>>(emptyList())
     val mediaTypes: StateFlow<List<MediaType>> = _mediaTypes.asStateFlow()
 
+    /**
+     * The add is one tap away from a network round-trip, and every failure path
+     * here used to return silently: the CTA stayed looking idle and the sheet
+     * said nothing. [adding] drives the button's busy state and [addError] is
+     * the sentence the sheet shows when the server refused the create.
+     */
+    private val _adding = MutableStateFlow(false)
+    val adding: StateFlow<Boolean> = _adding.asStateFlow()
+
+    private val _addError = MutableStateFlow<String?>(null)
+    val addError: StateFlow<String?> = _addError.asStateFlow()
+
     /** Which account's server each library came from; keys are `clientKey`s. */
     private val libraryAccount = mutableMapOf<String, StoredAccount>()
 
@@ -130,6 +142,7 @@ class ScanViewModel(
         try {
             val isbn = raw.filter { it.isDigit() || it == 'X' || it == 'x' }.uppercase()
             if (isbn.isEmpty()) return
+            _addError.value = null
             _phase.value = ScanPhase.LookingUp
 
             // Lookup and library fan-out run concurrently: the ownership card
@@ -254,8 +267,13 @@ class ScanViewModel(
         libraryAccount[lib.clientKey]?.let { return it }
         // `Library.serverName` carries the account's display name, and its URL
         // is not persisted on the model; matching by name is the routing the
-        // iOS source achieves by stamping `serverURL` onto the library.
-        return usableAccountsSnapshot().firstOrNull { it.name == lib.serverName }
+        // iOS source achieves by stamping `serverURL` onto the library. The URL
+        // is checked as well because a renamed account, or two accounts whose
+        // names were both left empty, would otherwise fall through to null and
+        // make the add a silent no-op.
+        val usable = usableAccountsSnapshot()
+        return usable.firstOrNull { it.name == lib.serverName && it.name.isNotEmpty() }
+            ?: usable.firstOrNull { lib.serverUrl.isNotEmpty() && it.url == lib.serverUrl }
     }
 
     private fun usableAccountsSnapshot(): List<StoredAccount> =
@@ -296,37 +314,93 @@ class ScanViewModel(
      *
      * Success haptics and the 700 ms pause before returning to the camera are
      * the UI layer's job; this only advances state so the sheet can react.
+     *
+     * Every refusal publishes an [addError] rather than returning quietly. The
+     * create itself is strict about `media_type_id`: the handler calls
+     * `uuid.Parse` on it (`internal/api/handlers/books.go:727-730`) and answers
+     * 400 "invalid media_type_id" for anything that is not a UUID, so an empty
+     * catalog must stop the tap here, with a sentence the user can act on,
+     * instead of becoming a 400 that nothing displays.
      */
     fun addBook(isbn: String, mediaTypeId: String?, readStatus: String?) {
         viewModelScope.launch {
             val phase = _phase.value as? ScanPhase.Result ?: return@launch
             val found = phase.found ?: return@launch
-            val library = selected ?: return@launch
+            val library = selected ?: run {
+                _addError.value = "No library is selected. Pick one above and try again."
+                return@launch
+            }
             addMutex.withLock {
-                val account = accountFor(library) ?: return@withLock
-                val client = clientFor(account)
-                val outcome = ScanRepository(lookupService).addToLibrary(
-                    api = client,
-                    library = library,
-                    lookupResult = found,
-                    // User's pick when they made one; otherwise the guess, not the
-                    // server's first row — the catalog is alphabetical, so
-                    // `firstOrNull()` files every book as "Anthology".
-                    mediaTypeId = mediaTypeId
-                        ?: guessMediaTypeId(found.categories, mediaTypesByServer[account.url].orEmpty()),
-                    readStatus = readStatus,
-                )
-                when (outcome) {
-                    is ScanRepository.AddOutcome.Added -> {
-                        // Auto-return to camera after a short pause so the next
-                        // book goes in back-to-back; the user can tap close first.
-                        delay(700)
-                        resetForNextScan()
+                _addError.value = null
+                _adding.value = true
+                try {
+                    val account = accountFor(library) ?: run {
+                        _addError.value =
+                            "No signed-in server matches ${library.name}. Sign in to its server again."
+                        return@withLock
                     }
-                    is ScanRepository.AddOutcome.Failure -> Unit
+                    val client = clientFor(account)
+
+                    // The user's pick wins; otherwise the shared guess. A null
+                    // here means the catalog has not arrived (a prefetch that
+                    // failed during lookup), so one retry is worth making before
+                    // declaring the add impossible.
+                    val resolvedMediaTypeId = mediaTypeId
+                        ?: guessMediaTypeId(found.categories, mediaTypesByServer[account.url].orEmpty())
+                        ?: guessMediaTypeId(found.categories, retryMediaTypes(account))
+                    if (resolvedMediaTypeId.isNullOrBlank()) {
+                        _addError.value =
+                            "${account.name} answered with no media types, so there is nothing to " +
+                                "file the book under. Try again in a moment."
+                        return@withLock
+                    }
+
+                    val outcome = ScanRepository(lookupService).addToLibrary(
+                        api = client,
+                        library = library,
+                        lookupResult = found,
+                        mediaTypeId = resolvedMediaTypeId,
+                        readStatus = readStatus,
+                    )
+                    when (outcome) {
+                        is ScanRepository.AddOutcome.Added -> {
+                            _addError.value = null
+                            // Auto-return to camera after a short pause so the
+                            // next book goes in back-to-back; the user can tap
+                            // close first.
+                            delay(700)
+                            resetForNextScan()
+                        }
+                        is ScanRepository.AddOutcome.Failure -> {
+                            _addError.value = outcome.message
+                        }
+                    }
+                } finally {
+                    _adding.value = false
                 }
             }
         }
+    }
+
+    /**
+     * One forced catalog fetch, for the add path only.
+     *
+     * [prefillMediaTypes] caches the first answer, including a failed one
+     * (empty list) so a dead server is not re-asked on every tap. That cache is
+     * still allowed to poison this add, so a blank catalog gets exactly one
+     * re-read before the failure is reported.
+     */
+    private suspend fun retryMediaTypes(account: StoredAccount): List<MediaType> {
+        val fresh = try {
+            clientFor(account).mediaTypes()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        if (fresh.isNotEmpty()) {
+            mediaTypesByServer[account.url] = fresh
+            publishMediaTypesForSelection()
+        }
+        return fresh
     }
 
     /** Back to the camera, with all per-scan state discarded. */
@@ -336,6 +410,8 @@ class ScanViewModel(
         _libraries.value = emptyList()
         _selectedLibraryKey.value = null
         _mediaTypes.value = emptyList()
+        _addError.value = null
+        _adding.value = false
         libraryAccount.clear()
         lookupInFlight = false
     }
