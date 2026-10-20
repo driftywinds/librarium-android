@@ -6,6 +6,7 @@ package com.dwprod.librariumscanner.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,7 +63,11 @@ fun RootShell(container: AppContainer) {
         val connectVm: ServerConnectViewModel = viewModel(
             factory = ServerConnectViewModel.Factory(container.accountManager)
         )
-        ServerConnectScreen(viewModel = connectVm, onConnected = { /* session flow re-emits */ })
+        // Edge-to-edge is enabled at the activity, so every shell branch is
+        // responsible for clearing the system bars itself.
+        Box(Modifier.fillMaxSize().systemBarsPadding()) {
+            ServerConnectScreen(viewModel = connectVm, onConnected = { /* session flow re-emits */ })
+        }
         return
     }
 
@@ -101,7 +106,9 @@ private fun ShellNavigate(container: AppContainer) {
         factory = BookEditViewModel.Factory(container),
     )
 
-    Box(Modifier.fillMaxSize().background(colors.appBackground)) {
+    // systemBarsPadding keeps the status bar (clock/battery) and the gesture
+    // nav bar clear; the dark app background shows behind both.
+    Box(Modifier.fillMaxSize().background(colors.appBackground).systemBarsPadding()) {
         NavHost(navController = nav, startDestination = "collection") {
             composable("collection") {
                 com.dwprod.librariumscanner.ui.collection.CollectionScreen(

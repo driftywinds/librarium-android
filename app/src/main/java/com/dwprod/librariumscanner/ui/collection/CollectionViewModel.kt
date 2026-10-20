@@ -105,6 +105,14 @@ class CollectionViewModel(
     /** Guards the paged appends so a fast fling does not double-fire one page. */
     private val moreMutex = Mutex()
 
+    /** Which face the pager is on; the drawer rail ticks this. */
+    private val _surface = MutableStateFlow(CollectionSurface.BOOKS)
+    val surface: StateFlow<CollectionSurface> = _surface.asStateFlow()
+
+    fun setSurface(surface: CollectionSurface) {
+        _surface.value = surface
+    }
+
     /** Books-list search debounce task-holder; cancelled on each keystroke. */
     private var searchJob: kotlinx.coroutines.Job? = null
 

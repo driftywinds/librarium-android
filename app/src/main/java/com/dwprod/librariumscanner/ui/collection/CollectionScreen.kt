@@ -37,8 +37,9 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,15 +59,14 @@ import com.dwprod.librariumscanner.core.model.Series
 import com.dwprod.librariumscanner.core.remote.BookSortField
 import com.dwprod.librariumscanner.core.remote.BrowseFacet
 import com.dwprod.librariumscanner.ui.theme.LocalLibrariumTheme
-import kotlinx.coroutines.launch
 
 /**
- * The collection shell: three faces sharing one screen, segmented like
- * `RedesignedCollectionView` does on iOS (`CollectionSegments.swift`).
+ * The collection shell: three faces behind a hamburger drawer.
  *
- * The segments are drawn inside the scroll content, not pinned by the shell: a
- * pushed book covers it, and a control that stays put while the screen under it
- * changes belongs to the wrong screen (`CollectionSegments.swift:26-29`).
+ * Faces live in a pager; the drawer picks which is front. The header (handle,
+ * app name, face count) is drawn by this screen: a pushed book covers it, and
+ * a control that stays put while the screen under it changes belongs to the
+ * wrong screen (`CollectionSegments.swift:26-29`).
  */
 @Composable
 fun CollectionScreen(
@@ -84,9 +84,10 @@ fun CollectionScreen(
     val authors by viewModel.authors.collectAsStateWithLifecycle()
     val libraries by viewModel.libraries.collectAsStateWithLifecycle()
     val reloadTick by viewModel.reloadTick.collectAsStateWithLifecycle()
+    val surface by viewModel.surface.collectAsStateWithLifecycle()
 
     val pagerState = rememberPagerState(pageCount = { CollectionSurface.entries.size })
-    val scope = rememberCoroutineScope()
+    var drawerOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadTick, libraries) {
         if (libraries.isNotEmpty()) {
@@ -96,54 +97,94 @@ fun CollectionScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(colors.appBackground)) {
-        // ---- surface segments -------------------------------------------
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 8.dp)
-                .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                .padding(4.dp),
-        ) {
-            CollectionSurface.entries.forEach { surface ->
-                val active = pagerState.currentPage == surface.ordinal
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (active) Color.White.copy(alpha = 0.08f) else Color.Transparent)
-                        .clickable { scope.launch { pagerState.animateScrollToPage(surface.ordinal) } }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
+    // The rail's tick and the pager stay one state: a rail tap pages, a swipe
+    // ticks the rail. iOS changes faces by replacing content; on a phone the
+    // pager keeps the panes' scroll positions alive across a drawer flip.
+    LaunchedEffect(surface) {
+        if (pagerState.currentPage != surface.ordinal) {
+            pagerState.scrollToPage(surface.ordinal)
+        }
+    }
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage }.collect { page ->
+            viewModel.setSurface(CollectionSurface.entries[page])
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(colors.appBackground)) {
+        Column(Modifier.fillMaxSize()) {
+            // ---- drawer handle + title -------------------------------------
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircleButton("☰") { drawerOpen = true }
+                Spacer(Modifier.width(12.dp))
+                Column {
                     Text(
-                        surface.label,
-                        color = if (active) colors.appText else colors.appText2,
-                        fontSize = 13.sp,
+                        "Librarium",
+                        color = colors.appText,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        when (surface) {
+                            CollectionSurface.BOOKS -> countTitle(books)
+                            CollectionSurface.SERIES -> "${series.total} series"
+                            CollectionSurface.AUTHORS -> "${authors.total} authors"
+                        },
+                        color = colors.appText3,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+
+            HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
+                when (CollectionSurface.entries[page]) {
+                    CollectionSurface.BOOKS -> BooksPane(
+                        state = books,
+                        viewModel = viewModel,
+                        onOpenBook = onOpenBook,
+                    )
+                    CollectionSurface.SERIES -> SeriesPane(
+                        state = series,
+                        viewModel = viewModel,
+                        onOpenSeries = onOpenSeries,
+                    )
+                    CollectionSurface.AUTHORS -> AuthorsPane(
+                        state = authors,
+                        viewModel = viewModel,
+                        onOpenAuthor = onOpenAuthor,
                     )
                 }
             }
         }
 
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
-            when (CollectionSurface.entries[page]) {
-                CollectionSurface.BOOKS -> BooksPane(
-                    state = books,
-                    viewModel = viewModel,
-                    onOpenBook = onOpenBook,
-                )
-                CollectionSurface.SERIES -> SeriesPane(
-                    state = series,
-                    viewModel = viewModel,
-                    onOpenSeries = onOpenSeries,
-                )
-                CollectionSurface.AUTHORS -> AuthorsPane(
-                    state = authors,
-                    viewModel = viewModel,
-                    onOpenAuthor = onOpenAuthor,
-                )
-            }
+        // Scan stays reachable from every pane: it is how the shelf grows.
+        CircleButton(
+            "＋",
+            filled = true,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(18.dp),
+            onClick = onScan,
+        )
+
+        if (drawerOpen) {
+            CollectionDrawer(
+                surface = surface,
+                onSurface = { s ->
+                    viewModel.setSurface(s)
+                    drawerOpen = false
+                },
+                onScan = {
+                    drawerOpen = false
+                    onScan()
+                },
+                onClose = { drawerOpen = false },
+            )
         }
     }
 }
@@ -284,6 +325,129 @@ private fun EmptyPane(text: String) {
     val colors = LocalLibrariumTheme.current.colors
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(text, color = colors.appText3, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
+}
+
+/**
+ * The vertical left menu. Drawn as a dimming scrim plus an inset panel rather
+ * than a `ModalNavigationDrawer`: the drawer row set is three destinations and
+ * one scan action, and a fixed library leaves no side of the scrim to miss.
+ *
+ * Future destinations (loans, saved views) slot into [drawerRows] without
+ * touching the shell.
+ */
+@Composable
+private fun CollectionDrawer(
+    surface: CollectionSurface,
+    onSurface: (CollectionSurface) -> Unit,
+    onScan: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val colors = LocalLibrariumTheme.current.colors
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable { onClose() },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(268.dp)
+                .background(colors.appCard)
+                .clickable(enabled = false) { /* swallow panel taps */ }
+                .padding(vertical = 18.dp),
+        ) {
+            Text(
+                "Librarium",
+                color = colors.appText,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 18.dp),
+            )
+            Spacer(Modifier.height(18.dp))
+            drawerRows.forEach { row ->
+                val active = row.surface != null && row.surface == surface
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSurface(row.surface) }
+                        .padding(horizontal = 18.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        row.icon,
+                        color = if (active) colors.accent else colors.appText2,
+                        fontSize = 18.sp,
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Text(
+                        row.label,
+                        color = if (active) colors.appText else colors.appText2,
+                        fontSize = 15.sp,
+                       fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                    )
+                }
+            }
+            // Scan is an action, not a destination that replaces the pane.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onScan() }
+                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("⌖", color = colors.accentStrong, fontSize = 18.sp)
+                Spacer(Modifier.width(14.dp))
+                Text("Scan a book", color = colors.accentStrong, fontSize = 15.sp)
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                "Signed in · scanning works",
+                color = colors.appText3,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 18.dp),
+            )
+        }
+    }
+}
+
+/** One destination row of the drawer. */
+private data class DrawerRow(
+    val icon: String,
+    val label: String,
+    val surface: CollectionSurface,
+)
+
+private val drawerRows = listOf(
+    DrawerRow("▤", "Books", CollectionSurface.BOOKS),
+    DrawerRow("▦", "Series", CollectionSurface.SERIES),
+    DrawerRow("✎", "Authors", CollectionSurface.AUTHORS),
+)
+
+/** Round icon button used by the shell header, filter button and scan FAB. */
+@Composable
+private fun CircleButton(
+    label: String,
+    filled: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val colors = LocalLibrariumTheme.current.colors
+    Box(
+        modifier = modifier
+            .size(if (filled) 56.dp else 38.dp)
+            .clip(CircleShape)
+            .background(if (filled) colors.accent else colors.appCard)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (filled) colors.appBackground else colors.appText2,
+            fontSize = if (filled) 22.sp else 17.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
