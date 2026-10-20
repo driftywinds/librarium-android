@@ -13,10 +13,10 @@ toolchain deliberately lives *inside* the workspace so it is disposable.
 
 | Tool | Location | Notes |
 | --- | --- | --- |
-| JDK 17 (Temurin) | `C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot` | Installed via winget. |
+| JDK 17 (Temurin) | `<absolute path to your JDK 17 install>` | Installed via winget. |
 | Git | `C:\Program Files\Git\cmd\git.exe` | Installed via winget. |
-| Android SDK | `W:\repos\librarium-android\.tooling\android-sdk` | `platforms;android-36`, `build-tools;36.0.0`, `platform-tools`. |
-| Gradle 9.8.1 | `W:\repos\librarium-android\.tooling\gradle-9.8.1` | Used to generate the wrapper; the build itself should use `gradlew`. |
+| Android SDK | `<workspace>\.tooling\android-sdk` | `platforms;android-36`, `build-tools;36.0.0`, `platform-tools`. |
+| Gradle 9.8.1 | `<workspace>\.tooling\gradle-9.8.1` | Used to generate the wrapper; the build itself should use `gradlew`. |
 | `local.properties` | repo root | `sdk.dir` points at the bundled SDK. **Git-ignored.** |
 
 `.tooling/` is git-ignored on purpose: it is machine-local, several GB, and
@@ -28,7 +28,7 @@ Always drive the build through the wrapper, and always set `JAVA_HOME` and
 `ANDROID_HOME` first — nothing is on `PATH`:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot'
+$env:JAVA_HOME = '<absolute path to your JDK 17 install>'
 $env:ANDROID_HOME = "$PWD\.tooling\android-sdk"
 ./gradlew.bat assembleDebug
 ```
@@ -106,6 +106,6 @@ The wrapper is committed (`gradle/wrapper/gradle-wrapper.jar` — note the
 the Gradle version:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot'
+$env:JAVA_HOME = '<absolute path to your JDK 17 install>'
 & "$PWD\.tooling\gradle-9.8.1\bin\gradle.bat" wrapper --gradle-version 9.8.1
 ```
