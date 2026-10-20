@@ -12,8 +12,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,8 +29,11 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dwprod.librariumscanner.ui.theme.LocalLibrariumTheme
+import kotlinx.coroutines.launch
 
 /**
  * "Add server" / first-run connect screen.
@@ -67,6 +74,12 @@ fun ServerConnectScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.appBackground)
+            // The keyboard is the reason this screen scrolls at all: the
+            // username/password fields sit low, and without the IME inset the
+            // scrollable area keeps its full height and they end up underneath
+            // the keyboard. Padding first, scrolling inside it, so the fields
+            // can move above the keyboard rather than behind it.
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 22.dp),
     ) {
@@ -247,6 +260,12 @@ private fun Field(
 ) {
     val theme = LocalLibrariumTheme.current
     val colors = theme.colors
+    // The keyboard covers the lower half of a phone; a field it covers is a
+    // field the reader cannot see what they typed into. `imePadding` has
+    // already shrunk the scroll viewport, so asking the field to come into
+    // view is what actually moves it above the keyboard.
+    val bringIntoView = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -271,7 +290,20 @@ private fun Field(
             unfocusedContainerColor = colors.appCard,
             cursorColor = colors.accent,
         ),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .bringIntoViewRequester(bringIntoView)
+            .onFocusChanged { focus ->
+                if (focus.isFocused) {
+                    scope.launch {
+                        // After the IME reports its height, not before: the
+                        // viewport has not shrunk yet at the instant of focus,
+                        // so bringing it into view then scrolls by nothing.
+                        kotlinx.coroutines.delay(150)
+                        bringIntoView.bringIntoView()
+                    }
+                }
+            },
     )
 }
 
