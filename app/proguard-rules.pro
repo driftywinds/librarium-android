@@ -11,11 +11,11 @@
 # kotlinx.serialization — generated serializers are referenced reflectively
 -keepattributes *Annotation*, InnerClasses
 -keepclassmembers class kotlinx.serialization.json.** { *; }
--keep,includedescriptorclasses class com.fireball1725.librarium.**$$serializer { *; }
--keepclassmembers class com.fireball1725.librarium.** {
+-keep,includedescriptorclasses class com.dwprod.librariumscanner.**$$serializer { *; }
+-keepclassmembers class com.dwprod.librariumscanner.** {
     *** Companion;
 }
--keepclasseswithmembers class com.fireball1725.librarium.** {
+-keepclasseswithmembers class com.dwprod.librariumscanner.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
 

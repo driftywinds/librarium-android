@@ -5,14 +5,14 @@ plugins {
 }
 
 android {
-    namespace = "com.fireball1725.librarium"
+    namespace = "com.dwprod.librariumscanner"
     // 37, not 36: navigation-compose 2.10.2, coil3 3.6.3 and Compose 1.12.1 all
     // publish AAR metadata requiring compileSdk >= 37, and `checkDebugAarMetadata`
     // fails the build outright on a mismatch.
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.fireball1725.librarium"
+        applicationId = "com.dwprod.librariumscanner"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

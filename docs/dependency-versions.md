@@ -315,11 +315,11 @@ plugins {
 }
 
 android {
-    namespace = "com.fireball1725.librarium"          // still required, still here
+    namespace = "com.dwprod.librariumscanner"         // still required, still here
     compileSdk = 37                                   // AGP 9.4 supports up to API 37
 
     defaultConfig {
-        applicationId = "com.fireball1725.librarium"
+        applicationId = "com.dwprod.librariumscanner"
         minSdk = 26
         targetSdk = 37
         versionCode = 1
