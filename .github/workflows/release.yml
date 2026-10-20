@@ -11,6 +11,11 @@
 #   ANDROID_KEYSTORE_PASSWORD store password
 #   ANDROID_KEY_ALIAS         key alias inside the keystore
 #   ANDROID_KEY_PASSWORD      key password
+#
+# Triggers:
+#   - a pushed tag `v<version>` cuts release v<version>;
+#   - a manual run whose version_name is given cuts release v<version_name>
+#     at the commit it built (leave it empty to only produce an artifact).
 name: release
 
 on:
@@ -20,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Version name (defaults to the tag, or 0.0.0-dev)'
+        description: 'Version to release (e.g. 1.4.0) — creates release v1.4.0. Empty = artifact only.'
         required: false
         default: ''
 
@@ -75,16 +80,24 @@ jobs:
       - name: Work out the version
         id: version
         shell: bash
+        env:
+          # Passed through the environment rather than pasted into the script:
+          # a dispatch input is free text, and a value containing a quote or a
+          # $(…) would otherwise be executed by the shell.
+          VERSION_INPUT: ${{ inputs.version_name }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          if [ -n "${{ inputs.version_name }}" ]; then
-            name="${{ inputs.version_name }}"
-          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            name="${tag#v}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            name="${GITHUB_REF#refs/tags/}"
+            name="${name#v}"
+          elif [ -n "${VERSION_INPUT}" ]; then
+            name="${VERSION_INPUT#v}"
           else
             name="0.0.0-dev"
           fi
           echo "name=${name}" >> "$GITHUB_OUTPUT"
+          # One tag shape for both triggers, so a dispatch release and a
+          # pushed tag cannot end up as two spellings of the same version.
+          echo "tag=v${name}" >> "$GITHUB_OUTPUT"
 
       - name: Decode the keystore
         shell: bash
@@ -136,12 +149,22 @@ jobs:
           path: ${{ steps.artifact.outputs.path }}
           if-no-files-found: error
 
-      - name: Attach it to the release
-        if: github.ref_type == 'tag'
+      - name: Publish the release
+        # Tags always publish; a manual run publishes too, but only when it was
+        # given a version — otherwise it would mint a v0.0.0-dev release nobody
+        # meant to cut. Both paths use the same v<version> tag.
+        if: github.ref_type == 'tag' || steps.version.outputs.name != '0.0.0-dev'
         uses: softprops/action-gh-release@v2
         with:
-          # The version the APK was actually stamped with, so the release page
-          # and the installed app cannot disagree.
-          name: v${{ steps.version.outputs.name }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          # Pins a dispatch-made tag to the commit this build came from, which
+          # is what makes the attached APK reproducible from the tag.
+          target_commitish: ${{ github.sha }}
           files: ${{ steps.artifact.outputs.path }}
           generate_release_notes: true
+
+      - name: Note that no release was cut
+        if: github.ref_type != 'tag' && steps.version.outputs.name == '0.0.0-dev'
+        run: echo "::warning::No version_name was given, so this run only produced a workflow artifact — no release was created."
+
