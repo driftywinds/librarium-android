@@ -245,12 +245,43 @@ fun BookEditScreen(
             )
         }
 
+        // The ISBN is the one edition field the phone can fill in honestly: it
+        // is printed on the copy in the reader's hands, and it is the code a
+        // later scan is matched on (`internal/repository/editions.go:229`), so
+        // it belongs on both the create and the edit path. Everything else about
+        // the edition stays with the web client — the note at the foot of the
+        // form says where.
+        FieldLabel("ISBN")
+        Field(value = state.isbn13, on = viewModel::setIsbn13, hint = "ISBN-13")
+        Spacer(Modifier.height(8.dp))
+        Field(value = state.isbn10, on = viewModel::setIsbn10, hint = "ISBN-10")
+        // Waiting on the probe, or the answer to it. Created books have never
+        // been scanned, so this is the only heads-up they get before a duplicate
+        // folds into an existing edition at Save (`internal/service/book.go:171-201`).
+        when {
+            state.isbnBusy -> Text(
+                "Checking this ISBN…",
+                color = colors.appText3,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            state.isbnKnownBook != null -> Text(
+                "Your library already has this ISBN, as \"${state.isbnKnownBook}\". Saving adds another copy of that book.",
+                color = colors.appText2,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            state.editingBookId == null -> Text(
+                "Hyphens are fine. A book saved with its ISBN can be recognised by scanning it.",
+                color = colors.appText3,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+
         if (state.edition != null) {
             FieldLabel("Edition")
-            Field(value = state.isbn13, on = viewModel::setIsbn13, hint = "ISBN-13")
-            Spacer(Modifier.height(8.dp))
-            Field(value = state.isbn10, on = viewModel::setIsbn10, hint = "ISBN-10")
-            Spacer(Modifier.height(8.dp))
             Field(value = state.publisher, on = viewModel::setPublisher, hint = "Publisher")
             Spacer(Modifier.height(8.dp))
             Field(value = state.language, on = viewModel::setLanguage, hint = "Language (e.g. en)")
@@ -262,6 +293,7 @@ fun BookEditScreen(
             )
             Spacer(Modifier.height(8.dp))
             Field(value = state.pageCount, on = viewModel::setPageCount, hint = "Pages")
+            Spacer(Modifier.height(8.dp))
         }
 
         FieldLabel("Authors")
@@ -303,24 +335,53 @@ fun BookEditScreen(
                 )
             }
         }
-        // Authors differ from tags and lists in one way worth keeping local: the
-        // draft lives in this composable because `addContributor` takes the name
-        // as an argument instead of reading a form field, so it can be cleared
-        // here on submit.
-        var authorDraft by remember { mutableStateOf("") }
+        // The typed draft lives in the view model now — `setAuthorQuery` is
+        // what drives the search below it, so the field cannot keep its state
+        // locally without either duplicating it or fighting the debounce.
         InlineAdder(
-            value = authorDraft,
-            on = { authorDraft = it },
-            hint = "Add an author…",
+            value = state.authorQuery,
+            on = viewModel::setAuthorQuery,
+            hint = "Search or add an author…",
             busy = state.contributorBusy,
             label = "Add",
-            onSubmit = {
-                viewModel.addContributor(authorDraft)
-                authorDraft = ""
-            },
+            onSubmit = { viewModel.addContributor(state.authorQuery) },
         )
+        if (state.authorSearchBusy) {
+            Text(
+                "Searching…",
+                color = colors.appText3,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        } else if (state.authorResults.isNotEmpty()) {
+            // What the instance answered. A row credits the person by id —
+            // no find-or-create pass, so a name that exists cannot be spelled
+            // into a second person by retyping it.
+            state.authorResults.forEach { person ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { viewModel.creditAuthor(person) }
+                        .padding(vertical = 6.dp, horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        person.name,
+                        color = colors.appText2,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "On this server",
+                        color = colors.appText3,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        }
         Text(
-            "A name that is not on this server yet is added as a new person.",
+            "From two letters, tap a name the server already knows; Add credits a name it does not.",
             color = colors.appText3,
             fontSize = 11.sp,
             modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
@@ -450,16 +511,17 @@ fun BookEditScreen(
  * The server models the two separately — a book has `books` rows and one or
  * more `book_editions`, and the edition is what carries ISBN, publisher,
  * language, page count and format (`internal/service/book.go:CreateBook` writes
- * both in one transaction). The web client edits the edition; this form
- * deliberately does not, so the reader is told where to go rather than left to
- * discover that half the fields they expect are missing.
+ * both in one transaction). The web client edits the edition. This form now
+ * takes the ISBN — printed on the copy being catalogued and the code scans are
+ * matched on — and the note points the remaining edition fields at the web
+ * client rather than leaving the reader to discover them missing.
  */
 @Composable
 private fun EditionNote(serverUrl: String) {
     val colors = LocalLibrariumTheme.current.colors
     if (serverUrl.isBlank()) return
     Text(
-        "Edition details — ISBN, publisher, language, page count and format — " +
+        "Further edition details — publisher, language, page count and format — " +
             "can be filled in or corrected in the web client at $serverUrl.",
         color = colors.appText3,
         fontSize = 11.sp,

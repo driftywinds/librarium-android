@@ -17,7 +17,7 @@ Last verified: `:app:assembleDebug :app:testDebugUnitTest` green (35 unit tests,
 | ISBN lookup | `core/lookup/IsbnLookupService.kt`, `core/lookup/IsbnCandidates.kt` | Field-wise merge with first-non-empty wins; `providerDisplay` = distinct credited providers joined `" + "`. Outcome split kept. |
 | Scan + add | `core/scan/ScanRepository.kt`, `ui/scan/*` | CameraX + ML Kit, exactly EAN-13/EAN-8/Code-128, single-shot. Ownership fan-out per library, add with nested edition, cover best-effort, 700 ms beat. |
 | Manual add ("Add manually") | `ui/ScanFlowRoute.kt`, `ui/RootShell.kt` | Camera top bar is Cancel (left) + **Add manually** (right); the latter closes the overlay and seeds `BookEditViewModel.startCreate` before navigating to `edit`. The no-match screen's button is **Enter ISBN** (typed barcode), deliberately worded apart from this. |
-| Book form | `ui/edit/BookEditScreen.kt`, `BookEditViewModel.kt` | Cover (camera or photo library, previewed from the parked bytes), title, subtitle, media type, description, authors, tags (inline create), genres, series, lists (create path, inline create). |
+| Book form | `ui/edit/BookEditScreen.kt`, `BookEditViewModel.kt` | Cover (camera or photo library, previewed from the parked bytes), title, subtitle, media type, description, authors (typed **or picked** from instance-wide debounced contributor search, min 2 chars as the server demands), tags (inline create), genres, series, lists (create path, inline create). ISBN fields on both paths: on create they ship an inline edition (`format = "physical"` as the scan flow sends); a 350 ms `book-by-isbn` probe names the book already holding a code while it is typed. On save, separators are stripped (`normaliseIsbn`), wrong-length codes are refused on create, and a title mismatch in the create answer is reported as a fold-in rather than navigated away from. |
 | Cover photo picker | `ui/edit/CoverPhotoPicker.kt` | `PickVisualMedia` → decode-sampled → EXIF-rotated → 1600 px long edge → JPEG @ 88. No `READ_MEDIA_IMAGES` needed. `sampleSizeFor` is unit-tested. |
 | Session | `core/session/SessionState.kt`, `SessionStore.kt` | `AccountManager` with `refreshMutex` single-flight refresh; needs-reauth keeps the account row. One JSON blob, not per-field keys. |
 | Cache | `core/cache/JsonCache.kt`, `BookCache.kt` | Key-hashed filenames, write-temp-then-rename. |
@@ -55,11 +55,12 @@ Ordered by what unblocks the most.
 - The scan result screen renders media type / status / tags inline rather than
   in sheets. This is a deliberate divergence — see
   `skills/librarium-ios-reference/SKILL.md`.
-- The book form does not write edition fields (ISBN, publisher, language, page
-  count, format) on the create path; the form's closing note points at the web
-  client. The *edit* path does write them, because it already loads the primary
-  edition — the gap is only "a book that does not exist yet has no edition row
-  to attach them to", and the scan flow's inline edition is the one exception.
+- The book form writes the ISBN on the create path (inline edition, `format = "physical"`) but not
+  the other edition fields (publisher, language, page count, format); the form's closing note points
+  at the web client. The *edit* path writes those too, because it already loads the primary edition.
+  Two ISBN edges are known: a code held in another library is still folded into its book on save
+  (only the per-library probe runs — the global match has no cheap read), and the inline edition's
+  format is a fixed `"physical"` while the field the server stores is free-form.
 - Genres are choice-only. Creating one is admin-only on the server
   (`internal/api/router.go:617-621`), so the form cannot offer it.
 - Tags are read per-library via `libraryTags`, not from `/me/tags`: `book_tags`

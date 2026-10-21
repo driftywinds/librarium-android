@@ -28,9 +28,11 @@ data and no offline-only mode.
   attribution, edit and delete with confirmation.
 - **Create / edit book** — the full manual path the web client offers: cover from the camera **or
   the photo library** (previewed before the book exists), title, subtitle, media type, description,
-  authors (existing or newly named), tags (existing or created inline), genres, series, and — on the
-  create path — the lists the new book joins (existing or created inline). Vocabularies come from
-  the server; edition-level fields are left to the web client, and the form says where.
+  authors (picked from what the server already knows, or newly named), tags (existing or created
+  inline), genres, series, ISBN on both paths (hyphens allowed, checked against the library while
+  typed), and — on the create path — the lists the new book joins (existing or created inline).
+  Remaining edition-level fields (publisher, language, page count, format) are left to the web
+  client, and the form says where.
 - **Multi-server session** — connect to one or more Librarium servers; tokens refresh
   single-flight, needs-reauth accounts are flagged, library rows are stamped with the server they
   came from.

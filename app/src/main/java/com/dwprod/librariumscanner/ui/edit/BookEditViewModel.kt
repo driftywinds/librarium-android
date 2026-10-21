@@ -11,6 +11,7 @@ import com.dwprod.librariumscanner.core.model.Book
 import com.dwprod.librariumscanner.core.model.BookContributor
 import com.dwprod.librariumscanner.core.model.BookEdition
 import com.dwprod.librariumscanner.core.model.BookSeriesRef
+import com.dwprod.librariumscanner.core.model.ContributorResult
 import com.dwprod.librariumscanner.core.model.Genre
 import com.dwprod.librariumscanner.core.model.MediaType
 import com.dwprod.librariumscanner.core.model.SavedList
@@ -20,6 +21,9 @@ import com.dwprod.librariumscanner.core.net.ApiException
 import com.dwprod.librariumscanner.core.remote.ContributorInput
 import com.dwprod.librariumscanner.core.remote.CreateBookRequest
 import com.dwprod.librariumscanner.core.remote.CreateEditionRequest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +47,24 @@ data class BookFormState(
     val contributors: List<BookContributor> = emptyList(),
     /** Set while a typed author name is being resolved or created. */
     val contributorBusy: Boolean = false,
+    /**
+     * People already on the instance who match what is being typed, so a name
+     * that exists can be picked rather than retyped.
+     *
+     * This is a second way in beside the type-a-name field, not a replacement:
+     * the search endpoint only answers from two characters and only returns
+     * the first ten hits (`internal/service/book.go:112-114`), so a name the
+     * search cannot reach is still addable by typing it in full.
+     */
+    val authorQuery: String = "",
+    val authorResults: List<ContributorResult> = emptyList(),
+    val authorSearchBusy: Boolean = false,
+    /**
+     * The last ISBN the instance was asked about, kept so the form can say what
+     * the server will do with it before Save rather than after.
+     */
+    val isbnKnownBook: String? = null,
+    val isbnBusy: Boolean = false,
     /** Cover plumbing: whether the book has one, and a write in flight. */
     val hasCover: Boolean = false,
     val coverBusy: Boolean = false,
@@ -117,6 +139,12 @@ class BookEditViewModel(
 
     private val _state = MutableStateFlow(BookFormState())
     val state: StateFlow<BookFormState> = _state.asStateFlow()
+
+    /** The debounced author search, cancelled and replaced on every keystroke. */
+    private var authorSearchJob: Job? = null
+
+    /** The debounced ISBN probe, same shape as [authorSearchJob]. */
+    private var isbnProbeJob: Job? = null
 
     val mediaTypes: List<MediaType> get() = _state.value.mediaTypes
 
@@ -311,8 +339,65 @@ class BookEditViewModel(
 
     fun setSeriesPosition(v: String) { _state.value = _state.value.copy(seriesPosition = v) }
 
-    fun setIsbn10(v: String) { _state.value = _state.value.copy(isbn10 = v) }
-    fun setIsbn13(v: String) { _state.value = _state.value.copy(isbn13 = v) }
+    fun setIsbn10(v: String) {
+        _state.value = _state.value.copy(isbn10 = v)
+        probeIsbn()
+    }
+
+    fun setIsbn13(v: String) {
+        _state.value = _state.value.copy(isbn13 = v)
+        probeIsbn()
+    }
+
+    /**
+     * Asks the instance whether an edition with this ISBN is already known.
+     *
+     * `CreateBook` does not hand back "this was a duplicate": when the code
+     * matches an edition anywhere on the server it reuses that book and edition
+     * and bumps the copy count for this library
+     * (`internal/service/book.go:171-201`), which quietly ignores the title,
+     * authors, tags and genres the form was filled with. The reader otherwise
+     * discovers that only after the fact, so the form probes while the code is
+     * being typed and says what will happen.
+     *
+     * `GET /libraries/{id}/book-by-isbn/{isbn}` is per-library
+     * (`internal/api/router.go:468`), so the probe answers "already in *this*
+     * library". A code held in another library on the instance still folds into
+     * the existing book on save — that case has no cheap read, and the copy it
+     * adds to this library is what the reader meant.
+     */
+    private fun probeIsbn() {
+        isbnProbeJob?.cancel()
+        val client = container.activeClient() ?: return
+        val s = _state.value
+        val code = normaliseIsbn(s.isbn13.ifBlank { s.isbn10 })
+        if (code.isEmpty()) {
+            // An empty box means "no ISBN": drop the previous book's name, or it
+            // would keep describing a code that is no longer on the form.
+            _state.value = _state.value.copy(isbnKnownBook = null, isbnBusy = false)
+            return
+        }
+        if (code.length !in ISBN_LENGTHS) return
+        isbnProbeJob = viewModelScope.launch {
+            // Long enough that typing a code is one request rather than one for
+            // every digit, short enough that the note still feels attached to
+            // the field. Same budget the collection's search uses.
+            delay(350)
+            _state.value = _state.value.copy(isbnBusy = true)
+            val already = try {
+                // Held in a local: `bookByIsbn` answers 404 when this library
+                // does not hold the code, which throws.
+                client.bookByIsbn(s.libraryId, code)
+            } catch (_: Exception) {
+                null
+            }
+            // A keystroke can have moved the field on while the read ran; the
+            // answer belongs to the code it was asked about, not to this one.
+            if (normaliseIsbn(_state.value.isbn13.ifBlank { _state.value.isbn10 }) != code) return@launch
+            _state.value = _state.value.copy(isbnKnownBook = already?.title, isbnBusy = false)
+        }
+    }
+
     fun setPublisher(v: String) { _state.value = _state.value.copy(publisher = v) }
     fun setLanguage(v: String) { _state.value = _state.value.copy(language = v) }
     fun setPublishDate(v: String) { _state.value = _state.value.copy(publishDate = v) }
@@ -466,6 +551,8 @@ class BookEditViewModel(
                         role = "author",
                         displayOrder = current.size,
                     ),
+                    authorQuery = "",
+                    authorResults = emptyList(),
                 )
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
@@ -474,6 +561,77 @@ class BookEditViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * The author search behind the picker: what is typed, and whom the instance
+     * answers with.
+     *
+     * `GET /contributors?q=` is the endpoint that reaches the whole instance —
+     * the per-library list (`/libraries/{id}/contributors`) only covers people
+     * who already have a book in that library, which is the wrong net for "who
+     * is already on the server". It also refuses short queries with an empty
+     * array (`internal/api/handlers/books.go:96`) and caps the answer at ten
+     * (`internal/service/book.go:112-114`), so the form stays quiet below two
+     * characters instead of showing a successful-looking nothing.
+     */
+    fun setAuthorQuery(text: String) {
+        _state.value = _state.value.copy(authorQuery = text)
+        authorSearchJob?.cancel()
+        val client = container.activeClient() ?: return
+        val query = text.trim()
+        if (query.length < AUTHOR_QUERY_MIN) {
+            _state.value = _state.value.copy(authorResults = emptyList(), authorSearchBusy = false)
+            return
+        }
+        authorSearchJob = viewModelScope.launch {
+            // The collection's search budget, for the same reason: one request
+            // per name rather than per letter.
+            delay(350)
+            _state.value = _state.value.copy(authorSearchBusy = true)
+            val found = try {
+                client.contributors(query)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList<ContributorResult>()
+            }
+            // People already credited are filtered out: offering the person the
+            // form already has is a second "already credited" error waiting to
+            // happen.
+            val credited = _state.value.contributors.map { it.contributorId }.toSet()
+            _state.value = _state.value.copy(
+                authorResults = found.filterNot { it.id in credited },
+                authorSearchBusy = false,
+            )
+        }
+    }
+
+    /**
+     * Credits a person the reader picked from the search rows.
+     *
+     * No request: the row already carries the contributor id the save body
+     * wants, which is the whole point of picking rather than retyping — the
+     * retyped spelling would have gone through the find-or-create and risked a
+     * second person for one name.
+     */
+    fun creditAuthor(person: ContributorResult) {
+        val current = _state.value.contributors
+        if (current.any { it.contributorId == person.id }) {
+            _state.value = _state.value.copy(error = "${person.name} is already credited.")
+            return
+        }
+        _state.value = _state.value.copy(
+            error = null,
+            contributors = current + BookContributor(
+                contributorId = person.id,
+                name = person.name,
+                role = "author",
+                displayOrder = current.size,
+            ),
+            authorQuery = "",
+            authorResults = emptyList(),
+        )
     }
 
     /** Drops a credit and closes the gap its display order leaves behind. */
@@ -510,6 +668,22 @@ class BookEditViewModel(
             )
             return
         }
+        // Separators are dropped before the length is judged: the phone wants
+        // to match what a scan will send, and a scan sends digits only.
+        val isbn13 = normaliseIsbn(s.isbn13)
+        val isbn10 = normaliseIsbn(s.isbn10)
+        if (s.editingBookId == null) {
+            // Policed on create only. An edition that predates this form may
+            // hold a code the catalogue printed wrong, and refusing to correct
+            // that book's title until somebody fixes the ISBN trades one repair
+            // for another — the web client owns edition repair, and the note at
+            // the foot of the form says so.
+            (isbnProblem(isbn13, 13, "The ISBN-13") ?: isbnProblem(isbn10, 10, "The ISBN-10"))?.let { problem ->
+                _state.value = s.copy(error = problem)
+                return
+            }
+        }
+
         val body = CreateBookRequest(
             title = title,
             subtitle = s.subtitle.trim(),
@@ -523,11 +697,34 @@ class BookEditViewModel(
                 .map { ContributorInput(it.contributorId, it.role, it.displayOrder) },
             tagIds = s.selectedTagIds.toList(),
             genreIds = s.selectedGenreIds.toList(),
-            // Edit sends no edition (BookService.swift:214); create does not
-            // either here — the scan flow owns inline editions.
-            edition = null,
+            // The scan flow owns the full inline edition, and an edit goes
+            // through its own update route below; what this form adds on the
+            // create path is the ISBN — the code that makes the book findable
+            // by barcode and that `CreateBook` dedupes on
+            // (`internal/service/book.go:171-201`). Without it the form's book
+            // has no edition at all, and no code for a later scan to recognise.
+            edition = if (s.editingBookId == null && (isbn13.isNotEmpty() || isbn10.isNotEmpty())) {
+                CreateEditionRequest(
+                    // `parseEditionRequestBody` refuses an empty one ("format
+                    // is required", `internal/api/handlers/editions.go:317`),
+                    // and the reader typing a code off a physical copy is what
+                    // this field is for — the same default the scan flow sends
+                    // (ScanRepository.addToLibrary, `format = "physical"`).
+                    // A real format choice stays with the web client, which the
+                    // note at the foot of the form names.
+                    format = "physical",
+                    isbn10 = isbn10,
+                    isbn13 = isbn13,
+                    copyCount = 1,
+                    isPrimary = true,
+                )
+            } else {
+                null
+            },
         )
-        _state.value = s.copy(saving = true, error = null)
+        // The saved code is the bare digits, so the boxes stop disagreeing with
+        // what went up the moment Save is pressed.
+        _state.value = s.copy(saving = true, error = null, isbn13 = isbn13, isbn10 = isbn10)
         viewModelScope.launch {
             try {
                 val book = if (s.editingBookId != null) {
@@ -555,8 +752,8 @@ class BookEditViewModel(
                                     narrator = edition.narrator,
                                     publisher = s.publisher.trim(),
                                     publishDate = s.publishDate.trim().ifEmpty { null },
-                                    isbn10 = s.isbn10.trim(),
-                                    isbn13 = s.isbn13.trim(),
+                                    isbn10 = isbn10,
+                                    isbn13 = isbn13,
                                     description = edition.description,
                                     pageCount = s.pageCount.trim().toIntOrNull(),
                                     copyCount = edition.copyCount,
@@ -583,6 +780,18 @@ class BookEditViewModel(
                 }
                 val listsMissed = writeLists(client, s, book.id)
                 val partial = coverMissed ?: listsMissed
+
+                // `CreateBook` folds a known ISBN into the edition already
+                // holding it and answers *that* book, leaving the typed title,
+                // authors, tags and genres aside
+                // (`internal/service/book.go:171-201`). The probe above warns
+                // the reader when this library holds the code, but a code held
+                // only in another library is folded in with no earlier signal,
+                // so the response itself is the tell: what came back is not
+                // what was typed.
+                val foldedIn = s.editingBookId == null && book.title.isNotBlank() &&
+                    !book.title.equals(title, ignoreCase = true)
+
                 if (partial != null) {
                     // The book itself is on the server. Staying on the form with
                     // a bare error would invite a second Save, and a second
@@ -595,13 +804,42 @@ class BookEditViewModel(
                         editingBookId = book.id,
                         hasCover = _state.value.hasCover || (coverMissed == null && s.pendingCover != null),
                         pendingCover = if (coverMissed == null) null else s.pendingCover,
-                        error = "The book was added, but ${partial.readable().lowercaseFirstSentence()} " +
+                        error = (if (foldedIn) foldInNote(book.title) + " " else "") +
+                            "The book was added, but ${partial.readable().lowercaseFirstSentence()} " +
                             "Press Save to try again — it will update this book rather than add another.",
                     )
                     return@launch
                 }
                 if (followUp != null) {
-                    _state.value = _state.value.copy(saving = false, error = followUp)
+                    // Fold-in plus a follow-up failure: the note leads with what
+                    // the ISBN did, the missing piece follows, and because the
+                    // edition fetch is asynchronous the cover/list failure is
+                    // what sets the editing id — either way the next Save
+                    // updates the folded book instead of creating another.
+                    if (foldedIn) loadPrimaryEdition(book.id, s.libraryId)
+                    _state.value = _state.value.copy(
+                        saving = false,
+                        editingBookId = if (foldedIn) book.id else _state.value.editingBookId,
+                        error = if (foldedIn) foldInNote(book.title) else followUp,
+                    )
+                    return@launch
+                }
+                if (foldedIn) {
+                    // Not navigating: popping with a note the reader never sees
+                    // would hide that the other fields were not applied, and
+                    // `saved` is what the screen watches to dismiss itself.
+                    // Staying turns the form into an editor of the book that
+                    // actually holds the ISBN, with its copy counted here — and
+                    // the edition is fetched so the form really does show that
+                    // book rather than claiming to.
+                    _state.value = _state.value.copy(
+                        saving = false,
+                        editingBookId = book.id,
+                        hasCover = _state.value.hasCover || (coverMissed == null && s.pendingCover != null),
+                        pendingCover = if (coverMissed == null) null else s.pendingCover,
+                        error = foldInNote(book.title),
+                    )
+                    loadPrimaryEdition(book.id, s.libraryId)
                     return@launch
                 }
                 _state.value = _state.value.copy(saving = false, saved = book)
@@ -678,6 +916,45 @@ private fun formatVolume(position: Double): String =
 
 private fun formatVolumeSafe(text: String): Double = text.trim().toDoubleOrNull() ?: 0.0
 
+/** The two ISBN lengths, as the server's `FindByISBN` match expects them. */
+internal val ISBN_LENGTHS = setOf(10, 13)
+
+/**
+ * A short query means "nothing to search on", matching what the server itself
+ * does (`internal/api/handlers/books.go:96` answers an empty array under two
+ * characters, so firing the request would only return one).
+ */
+internal const val AUTHOR_QUERY_MIN = 2
+
+/**
+ * Strips what a hand-typed ISBN arrives with, keeping the code itself.
+ *
+ * `FindByISBN` compares the bare column against the bare value
+ * (`WHERE isbn_10 = $1 OR isbn_13 = $1`, `internal/repository/editions.go:229`),
+ * and a later scan feeds that route digits off a barcode, so a stored
+ * "978-0-306-40615-7" would never be found by the book it came from. Separators
+ * are therefore dropped rather than stored, and a trailing `x` is upper-cased
+ * because the check digit is matched as text.
+ */
+internal fun normaliseIsbn(raw: String): String =
+    raw.filter { it.isDigit() || it == 'x' || it == 'X' }.uppercase()
+
+/**
+ * Why this string cannot be an ISBN, or null when it could be.
+ *
+ * Length only. A failing check digit is usually a catalogue that printed its
+ * own code wrong, and refusing it leaves the reader unable to record what is on
+ * the book in front of them — while a wrong length is never an ISBN at all and
+ * would sit in the column doing nothing except spoiling the next scan's match.
+ */
+internal fun isbnProblem(isbn: String, length: Int, label: String): String? =
+    if (isbn.isNotEmpty() && isbn.length != length) {
+        "An ISBN has $length digits — \"$isbn\" has ${isbn.length}. Check it, or leave the box empty."
+    } else {
+        null
+    }
+
+
 /** A sentence the reader can act on, whoever raised the failure. */
 private fun Throwable.readable(): String =
     (this as? ApiException)?.display
@@ -691,3 +968,18 @@ private fun Throwable.readable(): String =
  */
 private fun String.lowercaseFirstSentence(): String =
     replaceFirstChar { ch: Char -> if (ch.isUpperCase()) ch.lowercaseChar() else ch }
+
+/**
+ * What [BookEditViewModel.save] tells the reader when the server answered with
+ * an existing book rather than the one the form described.
+ *
+ * The copy is counted and the cover lands, but the typed title, authors, tags
+ * and genres do not — so the note names the book that holds the ISBN instead of
+ * reporting a plain success that saved the wrong-looking thing. The form stays
+ * open as an editor of that book, so "correct it there" is actionable right
+ * here.
+ */
+internal fun foldInNote(existingTitle: String): String =
+    "A book with this ISBN is already on this server as \"$existingTitle\", so a copy of it was " +
+        "added to your library — the title, authors, tags and genres you entered were not applied. " +
+        "The form now shows that book; edit it here or in the web client, or clear the ISBN to add a separate book."

@@ -16,6 +16,13 @@ The scanner is iOS-only: `AGENTS.md:11-12` calls this repo "the only client with
 therefore a new feature, not a port of an existing Android implementation — this document is the contract it
 must match.
 
+**Android divergence (deliberate, shipped):** the Android camera screen has no bottom
+"Enter ISBN or title" button and no in-flow manual sheet. Its top bar is **Cancel** (left) and
+**✎ Add manually** (right) — the latter closes the scan overlay and opens the shell's book form
+(`BookEditViewModel.startCreate`), which nowadays includes the ISBN fields the iOS no-match view's
+"Enter manually" would have reached. The no-match screen keeps **Enter ISBN** for the typed-barcode
+path, worded apart from the manual form on purpose.
+
 ---
 
 ## 1. Entry points & UX flow
