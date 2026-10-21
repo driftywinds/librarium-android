@@ -790,7 +790,14 @@ private fun ErrorView(
                 border = androidx.compose.foundation.BorderStroke(0.5.dp, colors.accent),
             ) {
                 Text(
-                    "Enter manually",
+                    // "Enter ISBN", not "Enter manually": the camera's top bar
+                    // now carries an "Add manually" button that opens the whole
+                    // blank form, and two controls with the same words would
+                    // read as the same destination. This one re-runs the lookup
+                    // with a typed ISBN. iOS still says "Enter manually"
+                    // (`RedesignedScanFlow.swift:1636`); the rename is this
+                    // build's, to keep the pair distinguishable.
+                    "Enter ISBN",
                     color = colors.accent,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,

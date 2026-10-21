@@ -262,6 +262,23 @@ private fun ShellNavigate(container: AppContainer) {
                 viewModel = scanVm,
                 collectionVm = collectionVm,
                 onFinish = { scanning = false },
+                onAddManually = {
+                    // Close the camera first, then seed and navigate. The form
+                    // is shell-scoped, so it has to be seeded while the shell is
+                    // the visible surface — navigating with the overlay still up
+                    // would leave the camera drawn over the form until the flag
+                    // caught up.
+                    scanning = false
+                    // The scope pick is normally set, but a scope the reader
+                    // cleared falls back to the first library rather than
+                    // dropping them on a form that cannot save ("No library to
+                    // add to."). With no libraries at all the form still opens:
+                    // it says so itself, which beats a button that does nothing.
+                    val libraryId = collectionVm.selectedLibraryId.value
+                        ?: collectionVm.libraries.value.firstOrNull()?.id.orEmpty()
+                    editVm.startCreate(libraryId)
+                    nav.navigate("edit")
+                },
             )
         }
     }

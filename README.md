@@ -15,8 +15,10 @@ data and no offline-only mode.
 
 - **ISBN scan-to-add** — CameraX + ML Kit barcode detection (EAN-13/EAN-8/Code-128, single-shot),
   multi-provider metadata lookup, ownership check against every signed-in server, then add with the
-  right media type guessed from the lookup or picked inline. Cancel via an on-screen **Cancel**
-  button or the back gesture. After adding, the collection grid refreshes immediately.
+  right media type guessed from the lookup or picked inline. **Cancel** (top left) leaves the flow;
+  **Add manually** (top right) leaves the camera for a blank book form instead. The no-match screen
+  offers **Enter ISBN**, which is the typed-barcode path, not the blank form. After adding, the
+  collection grid refreshes immediately.
 - **Collection** — books grid with search, sort, and server-computed browse facets (ownership, read
   status, media type, tags, genres, ratings, …) behind the filter button. 40-per-page incremental
   paging with dedupe.
@@ -24,8 +26,11 @@ data and no offline-only mode.
   per-author book list).
 - **Book detail** — cover hero, read-status chips (unread / want to read / reading / read), series
   attribution, edit and delete with confirmation.
-- **Create / edit book** — the manual path: vocabularies (media types, tags, genres) fetched from
-  the server; title, authors, series, media type and status editable.
+- **Create / edit book** — the full manual path the web client offers: cover from the camera **or
+  the photo library** (previewed before the book exists), title, subtitle, media type, description,
+  authors (existing or newly named), tags (existing or created inline), genres, series, and — on the
+  create path — the lists the new book joins (existing or created inline). Vocabularies come from
+  the server; edition-level fields are left to the web client, and the form says where.
 - **Multi-server session** — connect to one or more Librarium servers; tokens refresh
   single-flight, needs-reauth accounts are flagged, library rows are stamped with the server they
   came from.
@@ -82,7 +87,7 @@ app/src/main/java/com/dwprod/librariumscanner/
     ├── ScanFlowRoute.kt       scan phases, cancel/back handling, refresh hook
     ├── collection/            grid panes, drawer, series/authors detail
     ├── detail/                book detail (status chips, delete)
-    ├── edit/                  create/edit form
+    ├── edit/                  create/edit form, cover capture + photo picker
     ├── connect/               server address + login/bootstrap
     ├── scan/                  BarcodeCamera, ScanResultView, ScanViewModel
     └── theme/                 dark-only tokens ported from the iOS Theme.swift

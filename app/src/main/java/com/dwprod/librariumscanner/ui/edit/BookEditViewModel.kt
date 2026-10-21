@@ -13,6 +13,7 @@ import com.dwprod.librariumscanner.core.model.BookEdition
 import com.dwprod.librariumscanner.core.model.BookSeriesRef
 import com.dwprod.librariumscanner.core.model.Genre
 import com.dwprod.librariumscanner.core.model.MediaType
+import com.dwprod.librariumscanner.core.model.SavedList
 import com.dwprod.librariumscanner.core.model.Series
 import com.dwprod.librariumscanner.core.model.Tag
 import com.dwprod.librariumscanner.core.net.ApiException
@@ -46,6 +47,17 @@ data class BookFormState(
     val hasCover: Boolean = false,
     val coverBusy: Boolean = false,
     /**
+     * Cover bytes chosen for a book that does not exist yet.
+     *
+     * The upload route is `/libraries/{id}/books/{book_id}/cover`, so a cover
+     * picked on the create form has nowhere to go until the book has an id.
+     * The bytes are parked here — the form shows them as a preview — and
+     * [BookEditViewModel.save] uploads them straight after the create lands.
+     * On the edit path they are not used: that cover is already stored, so
+     * replacing it is immediate.
+     */
+    val pendingCover: ByteArray? = null,
+    /**
      * Series membership. A book can sit on several series, but a picker that
      * changes one at a time is what a phone can express; the first ref is the
      * one the form edits and [seriesRefs] is kept for display.
@@ -68,6 +80,20 @@ data class BookFormState(
     val language: String = "",
     val publishDate: String = "",
     val pageCount: String = "",
+    /**
+     * Where a brand-new book lands, and the lists it joins.
+     *
+     * Only the create path offers these: editing an existing book changes no
+     * list membership from this form, because a list is a set of books and the
+     * collection's multi-select is where that is edited.
+     */
+    val lists: List<SavedList> = emptyList(),
+    val selectedListIds: Set<String> = emptySet(),
+    val newListName: String = "",
+    val listBusy: Boolean = false,
+    /** New tag being made inline; a tag is a name plus nothing else. */
+    val newTagName: String = "",
+    val tagBusy: Boolean = false,
     val saving: Boolean = false,
     val error: String? = null,
     /** Set with the saved book when the write lands. */
@@ -94,13 +120,47 @@ class BookEditViewModel(
 
     val mediaTypes: List<MediaType> get() = _state.value.mediaTypes
 
+    /** The account's server origin, for the "edit editions on the web" note. */
+    val serverUrl: String get() = container.activeClient()?.serverUrl ?: ""
+
     fun loadVocabularies() {
         val client = container.activeClient() ?: return
+        // Tags have to come from the book's own library, not from `/me/tags`.
+        // That endpoint deliberately reaches across every library the caller can
+        // read (`internal/api/handlers/me_lookup.go:SearchTags`), but a book's
+        // tags are read back scoped to the library holding the copy
+        // (`internal/repository/books.go:139`, `tagsScope`), so a cross-library
+        // tag id would save and then never appear. `meTags` stays as the
+        // fallback for a form with no library yet, where there is nothing to
+        // scope to.
+        val libraryId = _state.value.libraryId
         viewModelScope.launch {
             val mediaTypes = runCatching { client.mediaTypes() }.getOrDefault(emptyList())
-            val allTags = runCatching { client.meTags(libraryId = "") }.getOrDefault(emptyList())
+            val tags = runCatching {
+                if (libraryId.isEmpty()) client.meTags() else client.libraryTags(libraryId)
+            }.getOrDefault(emptyList())
             val genres = runCatching { client.genres() }.getOrDefault(emptyList())
-            _state.value = _state.value.copy(mediaTypes = mediaTypes, tags = allTags, genres = genres)
+            // Manual lists only: a smart view computes its own books, so a new
+            // book cannot be filed into one.
+            val lists = runCatching { client.lists().filter { !it.isSmart } }
+                .getOrDefault(emptyList())
+                .sortedBy { it.name }
+            _state.value = _state.value.copy(
+                mediaTypes = mediaTypes,
+                tags = tags,
+                genres = genres,
+                lists = lists,
+                // `startCreate` can run before the catalog has ever been read
+                // (first open of the form on a fresh install), in which case it
+                // had nothing to preselect. Fill it in now — but only on the
+                // create path: an edit must not quietly change a book's media
+                // type just because the server returned an empty id.
+                mediaTypeId = if (_state.value.editingBookId == null) {
+                    _state.value.mediaTypeId.ifEmpty { mediaTypes.firstOrNull()?.id.orEmpty() }
+                } else {
+                    _state.value.mediaTypeId
+                },
+            )
         }
     }
 
@@ -108,10 +168,81 @@ class BookEditViewModel(
     fun startCreate(libraryId: String) {
         _state.value = BookFormState(
             libraryId = libraryId,
+            // The create body needs a media type and the server answers an
+            // empty one with "invalid media_type_id" (`decodeBookRequest`,
+            // `internal/api/handlers/books.go:727`), which names the field but
+            // not the fix. Preselecting the first of the server's own catalog
+            // means the common case never sees that error, and the chips show
+            // what was chosen.
+            mediaTypeId = _state.value.mediaTypes.firstOrNull()?.id.orEmpty(),
             mediaTypes = _state.value.mediaTypes,
             tags = _state.value.tags,
             genres = _state.value.genres,
+            lists = _state.value.lists,
         )
+        if (_state.value.mediaTypes.isEmpty()) loadVocabularies()
+    }
+
+    fun setLibraryId(libraryId: String) {
+        _state.value = _state.value.copy(libraryId = libraryId)
+    }
+
+    fun toggleList(id: String) {
+        val current = _state.value.selectedListIds
+        _state.value = _state.value.copy(
+            selectedListIds = if (id in current) current - id else current + id,
+        )
+    }
+
+    fun setNewListName(name: String) {
+        _state.value = _state.value.copy(newListName = name)
+    }
+
+    /** Makes a list inline and ticks it, so the new book lands in it. */
+    fun createList() {
+        val name = _state.value.newListName.trim()
+        if (name.isEmpty() || _state.value.listBusy) return
+        val client = container.activeClient() ?: return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(listBusy = true, error = null)
+            try {
+                val made = client.createList(name)
+                _state.value = _state.value.copy(
+                    listBusy = false,
+                    newListName = "",
+                    lists = (_state.value.lists + made).sortedBy { it.name },
+                    selectedListIds = _state.value.selectedListIds + made.id,
+                )
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(listBusy = false, error = e.readable())
+            }
+        }
+    }
+
+    fun setNewTagName(name: String) {
+        _state.value = _state.value.copy(newTagName = name)
+    }
+
+    /** Makes a tag inline and ticks it; the tag vocabulary is per-library. */
+    fun createTag() {
+        val name = _state.value.newTagName.trim()
+        val libraryId = _state.value.libraryId
+        if (name.isEmpty() || _state.value.tagBusy || libraryId.isEmpty()) return
+        val client = container.activeClient() ?: return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(tagBusy = true, error = null)
+            try {
+                val made = client.createTag(libraryId, name)
+                _state.value = _state.value.copy(
+                    tagBusy = false,
+                    newTagName = "",
+                    tags = _state.value.tags + made,
+                    selectedTagIds = _state.value.selectedTagIds + made.id,
+                )
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(tagBusy = false, error = e.readable())
+            }
+        }
     }
 
     /** Pre-fills from the book being corrected (`AddEditBookSheet.swift:61-87`). */
@@ -188,16 +319,31 @@ class BookEditViewModel(
     fun setPageCount(v: String) { _state.value = _state.value.copy(pageCount = v) }
 
     /**
-     * Replaces the cover with a photographed one.
+     * Replaces the cover with a photographed or picked one.
      *
-     * The bytes are the camera's own JPEG; the api stores whatever it is given
-     * under the book, and re-reading the book is the detail screen's job when
-     * this sheet closes.
+     * On the edit path the bytes go up immediately: the book exists, so the
+     * multipart route has an id to name. On the create path there is no id yet,
+     * so the bytes are parked as [BookFormState.pendingCover] and the form
+     * shows them as a preview until [save] creates the book and uploads them.
+     *
+     * The bytes are already a JPEG — the camera writes one, and the gallery
+     * picker re-encodes — which is what the endpoint's MIME sniff
+     * (`internal/api/uploads/sniff.go`) expects.
      */
     fun uploadCover(jpeg: ByteArray) {
         val client = container.activeClient() ?: return
         val s = _state.value
-        if (s.editingBookId == null || s.libraryId.isEmpty()) return
+        if (s.libraryId.isEmpty()) {
+            // The cover route is library-scoped, so there is nowhere to put the
+            // bytes. Say so: the picker has already closed by this point, and
+            // silently keeping the old preview reads as the pick having failed.
+            _state.value = s.copy(error = "Pick a library before adding a cover.")
+            return
+        }
+        if (s.editingBookId == null) {
+            _state.value = s.copy(pendingCover = jpeg, error = null)
+            return
+        }
         viewModelScope.launch {
             _state.value = _state.value.copy(coverBusy = true, error = null)
             try {
@@ -214,13 +360,23 @@ class BookEditViewModel(
 
     /** Removes the stored cover; the next metadata fetch may bring one back. */
     fun clearCover() {
+        // The picked-but-unsent cover is checked first and on its own: on the
+        // create path there is no book id at all, so keying off the id would
+        // make "Remove" a no-op exactly where it is the only way to undo a pick.
+        if (_state.value.pendingCover != null) {
+            _state.value = _state.value.copy(pendingCover = null)
+            return
+        }
+        // Held in a local: the smart cast on the nullable field would not
+        // survive into the coroutine below.
+        val bookId = _state.value.editingBookId ?: return
         val client = container.activeClient() ?: return
         val s = _state.value
-        if (s.editingBookId == null || s.libraryId.isEmpty()) return
+        if (s.libraryId.isEmpty()) return
         viewModelScope.launch {
             _state.value = _state.value.copy(coverBusy = true, error = null)
             try {
-                client.deleteCover(s.libraryId, s.editingBookId)
+                client.deleteCover(s.libraryId, bookId)
                 _state.value = _state.value.copy(coverBusy = false, hasCover = false)
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
@@ -254,10 +410,12 @@ class BookEditViewModel(
         }
     }
 
-    fun setTitle(v: String) { _state.value = _state.value.copy(title = v) }
-    fun setSubtitle(v: String) { _state.value = _state.value.copy(subtitle = v) }
+    fun setTitle(v: String) { _state.value = _state.value.copy(title = v) }    fun setSubtitle(v: String) { _state.value = _state.value.copy(subtitle = v) }
     fun setDescription(v: String) { _state.value = _state.value.copy(description = v) }
     fun setMediaTypeId(v: String) { _state.value = _state.value.copy(mediaTypeId = v) }
+
+    /** Surfaces a failure raised outside the request paths, e.g. an unreadable photo. */
+    fun setError(message: String?) { _state.value = _state.value.copy(error = message) }
 
     fun toggleTag(id: String) {
         val cur = _state.value.selectedTagIds
@@ -343,6 +501,15 @@ class BookEditViewModel(
             _state.value = s.copy(error = "A book needs a title.")
             return
         }
+        if (s.mediaTypeId.isEmpty()) {
+            // The server says "invalid media_type_id", which does not tell the
+            // reader that the fix is a chip tap. Only reachable when the catalog
+            // failed to load, so the wording points at that.
+            _state.value = s.copy(
+                error = "Pick a media type — the list did not load from this server.",
+            )
+            return
+        }
         val body = CreateBookRequest(
             title = title,
             subtitle = s.subtitle.trim(),
@@ -401,6 +568,38 @@ class BookEditViewModel(
                     runCatching { writeSeries(client, s, s.editingBookId) }
                         .onFailure { followUp = followUp ?: it.readable() }
                 }
+
+                // Cover and list membership are their own routes and both need
+                // the book's id, so neither is part of the body above and
+                // neither can be rolled back with it. Run unconditionally: on a
+                // retry after a partial failure both calls are idempotent —
+                // the cover is a straight overwrite, and `AddBook` upserts on
+                // `(list_id, book_id)` (`internal/repository/lists.go:AddBook`)
+                // — and on the plain edit path both are empty, so they cost
+                // nothing.
+                val coverMissed = s.pendingCover?.let { jpeg ->
+                    runCatching { client.uploadCover(s.libraryId, book.id, jpeg) }
+                        .exceptionOrNull()
+                }
+                val listsMissed = writeLists(client, s, book.id)
+                val partial = coverMissed ?: listsMissed
+                if (partial != null) {
+                    // The book itself is on the server. Staying on the form with
+                    // a bare error would invite a second Save, and a second
+                    // create — which the server rejects as a duplicate, so the
+                    // reader would see a failure for work that did land. Flipping
+                    // the form to editing that book instead makes Save safe and
+                    // retry only the piece that failed.
+                    _state.value = _state.value.copy(
+                        saving = false,
+                        editingBookId = book.id,
+                        hasCover = _state.value.hasCover || (coverMissed == null && s.pendingCover != null),
+                        pendingCover = if (coverMissed == null) null else s.pendingCover,
+                        error = "The book was added, but ${partial.readable().lowercaseFirstSentence()} " +
+                            "Press Save to try again — it will update this book rather than add another.",
+                    )
+                    return@launch
+                }
                 if (followUp != null) {
                     _state.value = _state.value.copy(saving = false, error = followUp)
                     return@launch
@@ -438,6 +637,33 @@ class BookEditViewModel(
         }
     }
 
+    /**
+     * Files the book into the lists ticked on the form. Returns the first
+     * failure, or null when every ticked list took it.
+     *
+     * A list is a separate resource: `POST /me/lists/{id}/books/{book_id}`
+     * (`internal/api/handlers/lists.go:AddBookToList`) takes one book at a
+     * time and answers 204, so this is one call per ticked list. Smart lists are
+     * excluded from the picker in [loadVocabularies] because the server refuses
+     * to add to them by hand (400, "that list fills itself from its filter"),
+     * and a reader cannot tell a smart list from a manual one by its name.
+     *
+     * The first failure is reported but does not stop the rest: a single list
+     * that rejects the book should not stop the other ticks landing.
+     */
+    private suspend fun writeLists(
+        client: com.dwprod.librariumscanner.core.remote.LibrariumApi2,
+        s: BookFormState,
+        bookId: String,
+    ): Throwable? {
+        var failure: Throwable? = null
+        for (listId in s.selectedListIds) {
+            runCatching { client.addBookToList(listId, bookId) }
+                .onFailure { if (failure == null) failure = it }
+        }
+        return failure
+    }
+
     class Factory(private val container: AppContainer) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
@@ -457,3 +683,11 @@ private fun Throwable.readable(): String =
     (this as? ApiException)?.display
         ?: message?.takeIf { it.isNotBlank() }
         ?: "Couldn't save."
+
+/**
+ * Drops the capital so a message can follow "but" in the middle of a sentence.
+ * Only touches a leading capital that begins a word, so an all-caps first token
+ * or a quote is left as written.
+ */
+private fun String.lowercaseFirstSentence(): String =
+    replaceFirstChar { ch: Char -> if (ch.isUpperCase()) ch.lowercaseChar() else ch }

@@ -329,8 +329,15 @@ class LibrariumApi2(private val api: LibrariumApi) {
     suspend fun createTag(libraryId: String, name: String): Tag =
         api.post("/api/v1/libraries/$libraryId/tags", CreateTagRequest(name))
 
-    /** Bare array; the person-scoped form. */
-    suspend fun meTags(libraryId: String, query: String = ""): List<Tag> {
+    /**
+     * Bare array; the person-scoped form, reaching across every library the
+     * caller can read (`internal/api/handlers/me_lookup.go:SearchTags`).
+     *
+     * Use [libraryTags] whenever a library is known: a book's tags are read
+     * back scoped to the library that holds the copy, so a tag from a different
+     * library would save and then not show.
+     */
+    suspend fun meTags(query: String = ""): List<Tag> {
         val q = if (query.isEmpty()) "" else "?q=${enc(query)}"
         return api.get("/api/v1/me/tags$q", ListSerializer(Tag.serializer()))
     }

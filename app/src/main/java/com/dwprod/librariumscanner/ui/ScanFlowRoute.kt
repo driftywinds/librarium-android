@@ -43,6 +43,15 @@ fun ScanFlowRoute(
     viewModel: ScanViewModel,
     collectionVm: CollectionViewModel,
     onFinish: () -> Unit,
+    /**
+     * Leaves the camera for the blank add-book form.
+     *
+     * A separate callback from [onFinish] because it is a different
+     * destination, not just a dismissal: the shell seeds the add/edit form and
+     * navigates to it. It still has to close this overlay, which is the shell's
+     * job — the scan flow holds no navigation state.
+     */
+    onAddManually: () -> Unit,
 ) {
     val phase by viewModel.phase.collectAsStateWithLifecycle()
     val libraries by viewModel.libraries.collectAsStateWithLifecycle()
@@ -62,6 +71,16 @@ fun ScanFlowRoute(
     // The back gesture/button cancels out of the whole flow instead of
     // leaving the app — the overlay owns the back edge while it is up.
     BackHandler(enabled = true) { finish() }
+
+    // Leaving for the form also counts as leaving the flow, so it bumps the
+    // tick too: a book added in an earlier result sheet, then abandoned by
+    // tapping "Add manually", is still a change the collection has to see. The
+    // form's own save path bumps it again, which is exactly right — by then
+    // there is a second book.
+    val leaveForForm = {
+        collectionVm.tickReload()
+        onAddManually()
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         BarcodeCamera(
             modifier = Modifier.fillMaxSize(),
@@ -78,13 +97,13 @@ fun ScanFlowRoute(
             is ScanPhase.Scanning -> {
                 // Cancel is also a back gesture: the shell's BackHandler traps
                 // it, so an explicit button keeps the affordance discoverable.
-                CancelScanButton(onCancel = finish)
+                CameraTopBar(onCancel = finish, onAddManually = leaveForForm)
                 ScanOverlay("Point at the ISBN barcode")
             }
             // No barcode in hand at this phase, so the hint stands in where the
             // result sheet would name the isbn it is working on.
             is ScanPhase.LookingUp -> {
-                CancelScanButton(onCancel = finish)
+                CameraTopBar(onCancel = finish, onAddManually = leaveForForm)
                 ScanOverlay("Looking it up…")
             }
             is ScanPhase.Result -> ScanResultView(
@@ -130,11 +149,26 @@ private fun ScanOverlay(text: String) {
 }
 
 /**
- * Cancel affordance for the camera phases. A result sheet already carries its
- * own close button; the two early phases are otherwise a view with no way out.
+ * The camera phases' top bar: Cancel on the left, "Add manually" on the right.
+ *
+ * Two different ways off the camera that are easy to confuse, so they are
+ * deliberately worded apart:
+ *
+ *  - Cancel leaves the whole flow (the same thing the back gesture does).
+ *  - "Add manually" leaves for the `edit` destination seeded empty by
+ *    `BookEditViewModel.startCreate`, which is this build's version of the web
+ *    client's blank "new book" form. iOS has the same two exits but puts the
+ *    blank form on the books list (`RedesignedBooksView.swift:190`), not on the
+ *    camera, because its camera is a sheet with a ✕ top-right
+ *    (`RedesignedScanFlow.swift:590`); carrying it here lets a reader who
+ *    cannot find a barcode stop scanning and type the book in without backing
+ *    out first.
+ *
+ * The result phase draws its own chrome, so this only ever composes over the
+ * live camera.
  */
 @Composable
-private fun CancelScanButton(onCancel: () -> Unit) {
+private fun CameraTopBar(onCancel: () -> Unit, onAddManually: () -> Unit) {
     Box(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -148,6 +182,24 @@ private fun CancelScanButton(onCancel: () -> Unit) {
             Text("⌫", color = Color.White, fontSize = 16.sp)
             Spacer(Modifier.width(8.dp))
             Text("Cancel", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 12.dp, end = 16.dp)
+                .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(999.dp))
+                .clickable { onAddManually() }
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("✎", color = Color.White, fontSize = 15.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Add manually",
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+            )
         }
     }
 }
